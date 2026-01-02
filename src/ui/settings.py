@@ -86,7 +86,9 @@ def render_settings(data_manager: DataManager):
                          if 'necessity' not in df.columns:
                             df['necessity'] = 'Want'
                          
-                         data_manager.con.execute("INSERT INTO transactions SELECT date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity FROM df")
+                         # Ensure ID exists, if not generate (though it should from get_transactions)
+                         # But wait, df comes from get_transactions so it has id.
+                         data_manager.con.execute("INSERT INTO transactions SELECT date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity, id FROM df")
                          
                          st.success("Rules applied successfully!")
                      else:
