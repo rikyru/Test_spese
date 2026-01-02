@@ -1,0 +1,10 @@
+streamlit
+duckdb
+pandas
+pyyaml
+plotly
+openpyxl
+xlsxwriter
+watchdog
+python-dateutil
+pdfplumber

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  finance_app:
+    build: .
+    container_name: finance_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      # Map the data folder on host to /app/data in container
+      - ./finance_data:/app/data
+    environment:
+      - DB_PATH=/app/data/finance.duckdb
+      - RULES_PATH=/app/data/rules.yaml
+    restart: unless-stopped

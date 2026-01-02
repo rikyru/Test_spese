@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# OS
+.DS_Store
+
+# Application Data (CRITICAL: Do not commit these)
+finance.duckdb
+finance_data/
+rules.yaml
+
+# Temp/Test Scripts
+debug_log.txt
+debug_db_content.py
+test_*.py
+check_tags.py
