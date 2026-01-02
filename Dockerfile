@@ -21,4 +21,4 @@ COPY . .
 EXPOSE 8501
 
 # Run the application
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
+ENTRYPOINT ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.fileWatcherType=none"]
