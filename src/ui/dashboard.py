@@ -46,7 +46,15 @@ def render_dashboard(data_manager):
             today = datetime.date.today()
             default_month_idx = today.month - 1
             
-            selected_year = st.sidebar.selectbox("Select Year", sorted(df['year'].unique(), reverse=True))
+            # Years: Union of DB years and Current Year
+            available_years = sorted(list(set(df['year'].unique()) | {today.year}), reverse=True)
+            
+            # Default index: try to find today.year
+            default_year_idx = 0
+            if today.year in available_years:
+                default_year_idx = available_years.index(today.year)
+            
+            selected_year = st.sidebar.selectbox("Select Year", available_years, index=default_year_idx)
             selected_month = st.sidebar.selectbox("Select Month", range(1, 13), index=default_month_idx)
             filtered_df = df[(df['year'] == selected_year) & (df['month'] == selected_month)]
             st.caption(f"Showing data for: {selected_month}/{selected_year}")
