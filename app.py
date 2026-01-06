@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import pandas as pd
+from datetime import datetime
 from src.data_manager import DataManager
 from src.ui.dashboard import render_dashboard
 from src.ui.importer import render_importer
@@ -8,9 +9,8 @@ from src.ui.transactions import render_transactions
 from src.ui.analysis import render_analysis
 from src.ui.settings import render_settings
 from src.ui.recurring import render_recurring
+from src.ui.split import render_split
 from src.ui.styling import apply_custom_styles
-import pandas as pd
-from datetime import datetime
 
 st.set_page_config(page_title="Finance Dashboard", layout="wide", page_icon="💸")
 
@@ -25,7 +25,7 @@ dm = st.session_state.data_manager
 
 # Sidebar Navigation
 st.sidebar.title("💰 Finance App")
-page = st.sidebar.radio("Navigate", ["Dashboard", "Analysis", "Transactions", "Recurring", "Import Data", "Settings"])
+page = st.sidebar.radio("Navigate", ["Dashboard", "Analysis", "Transactions", "Recurring", "Split Expenses", "Import Data", "Settings"])
 
 st.sidebar.divider()
 
@@ -47,8 +47,6 @@ with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
         qa_desc = st.text_input("Description", placeholder="e.g. Dinner with friends")
         
         # Category: Select or Type
-        # Streamlit simple selectbox doesn't allow typing new unless we use a workaround or two widgets.
-        # User said: "pesca dalle categorie esistenti". We can add "Other" -> New.
         qa_cat_sel = st.selectbox("Category", ["Select..."] + cats + ["Create New..."])
         qa_cat_new = ""
         if qa_cat_sel == "Create New...":
@@ -57,7 +55,6 @@ with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
         qa_cat = qa_cat_new if qa_cat_sel == "Create New..." else (qa_cat_sel if qa_cat_sel != "Select..." else "General")
 
         # Account/Wallet
-        # Default to first available or 'Cash'
         default_acc_idx = 0
         if accounts:
             qa_account_sel = st.selectbox("Wallet/Account", accounts + ["New Account..."])
@@ -68,10 +65,7 @@ with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
         if qa_account_sel == "New Account...":
             qa_account = st.text_input("New Account Name")
 
-        # Tags: Multiselect + Allow creating new by typing (multiselect supports custom entries on Enter?)
-        # Streamlit default multiselect: user can search, but strictly strict unless we add logic.
-        # User said: "tra i tag già esistenti dando modo di aggiungere un tag".
-        # We'll use multiselect for existing + text input for new.
+        # Tags
         qa_tags_sel = st.multiselect("Tags", existing_tags)
         qa_new_tag = st.text_input("New Tag (Optional)", placeholder="#holiday")
         
@@ -84,9 +78,7 @@ with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
                 final_acc = qa_account if qa_account else "Manual"
                 
                 final_tags = list(qa_tags_sel)
-                print(f"DEBUG: Selected tags: {qa_tags_sel}, New tag input: {qa_new_tag}")
                 if qa_new_tag:
-                    # Clean tag
                     clean = qa_new_tag.strip().replace('#', '').lower()
                     if clean:
                         final_tags.append(clean)
@@ -98,7 +90,7 @@ with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
                     'currency': 'EUR',
                     'account': final_acc,
                     'category': final_cat,
-                    'tags': final_tags, # DuckDB expects list or we convert to str? Pandas->DuckDB handles list usually.
+                    'tags': final_tags,
                     'description': qa_desc,
                     'type': qa_type,
                     'source_file': 'manual_entry',
@@ -127,6 +119,9 @@ elif page == "Transactions":
 
 elif page == "Recurring":
     render_recurring(dm)
+
+elif page == "Split Expenses":
+    render_split(dm)
     
 elif page == "Import Data":
     render_importer(dm)
