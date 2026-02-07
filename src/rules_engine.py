@@ -6,7 +6,8 @@ class RulesEngine:
     def __init__(self, rules_path=None):
         import os
         if rules_path is None:
-            rules_path = os.getenv("RULES_PATH", "rules.yaml")
+            default_path = "finance_data/rules.yaml" if os.path.exists("finance_data") else "rules.yaml"
+            rules_path = os.getenv("RULES_PATH", default_path)
         self.rules_path = rules_path
         self.rules = self.load_rules()
 

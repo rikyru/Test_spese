@@ -211,19 +211,163 @@ def render_dashboard(data_manager):
                               labels={'value': 'Amount (€)', 'month': 'Month', 'variable': 'Year'})
             st.plotly_chart(fig_yoy, use_container_width=True)
 
-        # 3. Time Trend (Current Selection)
+        # 3. Monthly Balance Trend (Combo Chart)
+        st.subheader("Monthly Balance Trend")
+        
+        # Prepare data for all time (or filtered range if user wants, but Trend is usually best over time)
+        # Using filtered_df if "Month" filter is NOT active makes sense.
+        # If "Month" is active, maybe show Daily trend? 
+        # User requested "Monthly balance", so let's stick to Monthly aggregation of the full or filtered dataset.
+        
+        trend_source = df if filter_mode == "Month" else filtered_df # If in Month view, show everything for context? Or logic:
+        # If User selected "Year 2024", show months of 2024.
+        # If User selected "All Time", show all months.
+        # If User selected "Month", show daily??? No, user asked for "Month by Month".
+        # So if they are in "Month" view, this chart might be static single point?
+        # Let's use the 'df' (full data) filtered by the selected Year if in Year mode, or just full df for context.
+        # Actually standard behavior: Dashboard charts usually reflect filters. But "Trend" implies time series.
+        # If in "Month" view, let's show Daily trend for that month instead?
+        # User asked: "grafico del saldo mese per mese che ora manca". This implies a Year/AllTime view.
+        
+        chart_data = filtered_df.copy()
+        if filter_mode == "Month":
+             # In Month mode, showing "Month by Month" is one bar. 
+             # Let's switch to show the whole Year of the selected month to give context?
+             # Or show Daily for that month.
+             # Implem: If Month mode, show Daily. If Year/AllTime, show Monthly.
+             pass
+        
+        # We'll implement Monthly View for Year/AllTime, and Daily for Month mode.
+        
+        if filter_mode == "Month":
+             # Daily Trend
+             st.caption("Daily Trend for selected month")
+             # Group by Day
+             trend_grouped = filtered_df.groupby([pd.Grouper(key='date', freq='D')])['amount'].sum().reset_index()
+             # Cumulative? Or just daily flux?
+             
+             # Let's do the requested "Month by Month" properly for Year/Custom/AllTime
+             pass
+
         if filter_mode != "Month": # Trend makes sense if more than 1 month
-            st.subheader("Cash Flow Trend")
-            # ... existing trend chart code ...
-            # Resample by Week or Day depending on range
+            # Group by Month-Year
+            # We need columns: MonthYear, Income, Expense, Balance
+            
             trend_df = filtered_df.copy()
-            trend_df['type'] = trend_df['type'].apply(lambda x: 'Expense' if x == 'Expense' else 'Income') # Ensure 2 types
+            trend_df['month_date'] = trend_df['date'].apply(lambda d: d.replace(day=1))
             
-            # Group by bigger chunks for readability
-            trend_grouped = trend_df.groupby([pd.Grouper(key='date', freq='W'), 'type'])['amount'].sum().reset_index()
+            monthly_stats = trend_df.groupby('month_date').apply(
+                lambda x: pd.Series({
+                    'Income': x[x['type'] == 'Income']['amount'].sum(),
+                    'Expense': x[x['type'] == 'Expense']['amount'].sum(),
+                    'Balance': x['amount'].sum()
+                })
+            ).reset_index()
             
-            fig_trend = px.bar(trend_grouped, x='date', y='amount', color='type', barmode='relative', title="Weekly Cash Flow")
-            st.plotly_chart(fig_trend, use_container_width=True)
+            if not monthly_stats.empty:
+                # 1. Monthly Balance Combo Chart
+                st.subheader("Monthly Balance Trend")
+                fig_combo = go.Figure()
+                
+                # Income Bar (Green)
+                fig_combo.add_trace(go.Bar(
+                    x=monthly_stats['month_date'], 
+                    y=monthly_stats['Income'],
+                    name='Income',
+                    marker_color='#4CAF50'
+                ))
+                
+                # Expense Bar (Red)
+                fig_combo.add_trace(go.Bar(
+                    x=monthly_stats['month_date'], 
+                    y=monthly_stats['Expense'],
+                    name='Expenses',
+                    marker_color='#EF5350'
+                ))
+                
+                # Net Balance Line (Blue)
+                fig_combo.add_trace(go.Scatter(
+                    x=monthly_stats['month_date'], 
+                    y=monthly_stats['Balance'],
+                    name='Net Balance',
+                    mode='lines+markers',
+                    line=dict(color='#2196F3', width=3),
+                    marker=dict(size=8)
+                ))
+                
+                fig_combo.update_layout(
+                    title="Monthly Income, Expenses & Balance",
+                    barmode='overlay',
+                    xaxis_title="Month",
+                    yaxis_title="Amount (€)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hovermode="x unified"
+                )
+                
+                st.plotly_chart(fig_combo, use_container_width=True)
+                
+                # 2. Total Net Worth Evolution
+                st.subheader("📈 Total Net Worth Evolution")
+                # Calculate cumulative sum of ALL transactions (df, not filtered_df, usually? 
+                # Or filtered? Net Worth is usually global state.
+                # If I filter by "2024", starting from 0 is wrong. I need the balance at start of 2024.
+                # So we must use full DF, calculate running balance, then filter for view.
+                
+                # Sort full df
+                nw_df = df.sort_values('date').copy()
+                nw_df['cumulative_balance'] = nw_df['amount'].cumsum()
+                
+                # If filter is applied, slice the view but keep values correct
+                if filter_mode == "Year":
+                     # Filter date >= start of year
+                     start_of_year = pd.Timestamp(selected_year, 1, 1).date()
+                     end_of_year = pd.Timestamp(selected_year, 12, 31).date()
+                     chart_nw = nw_df[(nw_df['date'].dt.date >= start_of_year) & (nw_df['date'].dt.date <= end_of_year)]
+                elif filter_mode == "Custom":
+                     chart_nw = nw_df[(nw_df['date'].dt.date >= start_date) & (nw_df['date'].dt.date <= end_date)]
+                else: 
+                     chart_nw = nw_df # All time
+                
+                if not chart_nw.empty:
+                    # To reduce noise (daily fluctuations), maybe sample by day or week?
+                    # Group by Day first to sum same-day transactions
+                    daily_nw = chart_nw.groupby('date')['cumulative_balance'].last().reset_index()
+                    
+                    fig_nw = px.area(daily_nw, x='date', y='cumulative_balance', 
+                                    title="Total Net Worth Over Time",
+                                    labels={'cumulative_balance': 'Net Worth (€)'})
+                    fig_nw.update_layout(hovermode="x unified")
+                    
+                    # Color based on positive/negative? Area usually single color.
+                    fig_nw.update_traces(line_color='#009688', fillcolor='rgba(0, 150, 136, 0.3)')
+                    
+                    st.plotly_chart(fig_nw, use_container_width=True)
+            else:
+                st.info("No data for trend.")
+        
+        else:
+             # If in Month mode, maybe user still wants to see the Year context?
+             # Let's show the "Year Context" even in Month mode.
+             st.subheader("Yearly Context")
+             # Get whole year data
+             year_df = df[df['year'] == selected_year].copy()
+             year_df['month_date'] = year_df['date'].apply(lambda d: d.replace(day=1))
+             
+             monthly_stats = year_df.groupby('month_date').apply(
+                lambda x: pd.Series({
+                    'Income': x[x['amount'] > 0]['amount'].sum(),
+                    'Expense': x[x['amount'] < 0]['amount'].sum(),
+                    'Balance': x['amount'].sum()
+                })
+             ).reset_index()
+             
+             fig_combo = go.Figure()
+             fig_combo.add_trace(go.Bar(x=monthly_stats['month_date'], y=monthly_stats['Income'], name='Income', marker_color='#4CAF50'))
+             fig_combo.add_trace(go.Bar(x=monthly_stats['month_date'], y=monthly_stats['Expense'], name='Expenses', marker_color='#EF5350'))
+             fig_combo.add_trace(go.Scatter(x=monthly_stats['month_date'], y=monthly_stats['Balance'], name='Net Balance', mode='lines+markers', line=dict(color='#2196F3', width=3)))
+             
+             fig_combo.update_layout(title=f"Overview {selected_year}", barmode='relative', hovermode="x unified")
+             st.plotly_chart(fig_combo, use_container_width=True)
 
         st.divider()
 

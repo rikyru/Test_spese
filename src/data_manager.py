@@ -8,7 +8,9 @@ from .rules_engine import RulesEngine
 class DataManager:
     def __init__(self, db_path=None):
         if db_path is None:
-            db_path = os.getenv("DB_PATH", "finance.duckdb")
+            # Check if finance_data folder exists, otherwise use root
+            default_path = "finance_data/finance.duckdb" if os.path.exists("finance_data") else "finance.duckdb"
+            db_path = os.getenv("DB_PATH", default_path)
         self.con = duckdb.connect(db_path)
         self.rules_engine = RulesEngine()
         self.setup_db()
@@ -105,13 +107,27 @@ class DataManager:
         for _, row in due.iterrows():
             # Get props, handle missing
             desc = row.get('description') if pd.notna(row.get('description')) else row['name']
-            tags = row.get('tags') if isinstance(row.get('tags'), list) else ['Recurring']
+            
+            # Handle tags safely (DuckDB might return numpy array or list)
+            raw_tags = row.get('tags')
+            current_tags = []
+            if isinstance(raw_tags, list):
+                current_tags = raw_tags
+            elif hasattr(raw_tags, 'tolist'):
+                current_tags = raw_tags.tolist()
+            elif pd.notna(raw_tags) and raw_tags: # String or other
+                # Try to ensure it's a list
+                current_tags = list(raw_tags) if not isinstance(raw_tags, str) else [raw_tags]
+            
+            # Add 'Recurring' tag if not present
+            if 'Recurring' not in current_tags:
+                current_tags.append('Recurring')
             
             # Insert Transaction
             self.con.execute("""
                 INSERT INTO transactions (date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity, id)
                 VALUES (?, ?, 'EUR', ?, ?, ?, ?, 'Expense', 'Recurring', ?, 'Need', uuid())
-            """, [row['next_date'], row['amount'], row['account'], row['category'], tags, desc, row['name']])
+            """, [row['next_date'], row['amount'], row['account'], row['category'], current_tags, desc, row['name']])
             
             # Update next_date
             next_date = pd.to_datetime(row['next_date']).date()
@@ -141,6 +157,54 @@ class DataManager:
             count += 1
             
         return count
+
+    def get_initial_balance(self):
+        """
+        Retrieves the initial balance transaction if it exists.
+        Returns: dict with {date, amount} or None
+        """
+        try:
+            # Look for strict match first
+            res = self.con.execute("SELECT date, amount FROM transactions WHERE description = 'Saldo Iniziale' AND list_contains(tags, 'Initial') LIMIT 1").fetchone()
+            if res:
+                return {'date': res[0], 'amount': res[1]}
+            
+            # Fallback (maybe tag is missing or string)
+            res = self.con.execute("SELECT date, amount FROM transactions WHERE description = 'Saldo Iniziale' LIMIT 1").fetchone()
+            if res:
+                 return {'date': res[0], 'amount': res[1]}
+                 
+            return None
+        except Exception:
+            return None
+
+    def set_initial_balance(self, date, amount):
+        """
+        Sets or updates the initial balance.
+        """
+        # Check if exists
+        existing = self.get_initial_balance()
+        
+        if existing:
+            # Update
+            self.con.execute("""
+                UPDATE transactions 
+                SET date = ?, amount = ?
+                WHERE description = 'Saldo Iniziale'
+            """, [date, amount])
+        else:
+            # Insert
+            import datetime
+            # Ensure date is date object
+            if isinstance(date, str):
+                date = pd.to_datetime(date).date()
+                
+            self.con.execute("""
+                INSERT INTO transactions (id, date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity)
+                VALUES (uuid(), ?, ?, 'EUR', 'Initial Assets', 'Initial Balance', ['Initial'], 'Saldo Iniziale', 'Income', 'manual_entry', 'Saldo Iniziale', 'Need')
+            """, [date, amount])
+            
+        return True
 
     def get_projected_recurring(self, end_date):
         """

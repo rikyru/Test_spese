@@ -1,9 +1,46 @@
 import streamlit as st
 import yaml
+import pandas as pd
 from src.data_manager import DataManager
 
 def render_settings(data_manager: DataManager):
+    import pandas as pd
     st.header("Settings & Rules")
+    
+    # --- Initial Balance ---
+    st.subheader("💰 Initial Balance (Patrimonio Iniziale)")
+    st.info("Set the starting point for your Net Worth calculation.")
+    
+    current_init = data_manager.get_initial_balance()
+    
+    default_date = pd.to_datetime('2022-01-01').date()
+    default_amount = 0.0
+    
+    if current_init:
+        # Safe conversion
+        try:
+             # If duckdb returns date object or datetime
+             d = current_init['date']
+             if hasattr(d, 'date'):
+                 default_date = d.date()
+             else:
+                 default_date = d # assume date object
+             default_amount = float(current_init['amount'])
+        except:
+             pass
+
+    col_ib1, col_ib2, col_ib3 = st.columns([1, 1, 1])
+    with col_ib1:
+        init_date = st.date_input("Start Date", value=default_date)
+    with col_ib2:
+        init_amount = st.number_input("Starting Amount (€)", value=default_amount, step=100.0)
+        
+    if st.button("Save Initial Balance"):
+        data_manager.set_initial_balance(init_date, init_amount)
+        st.success(f"Initial Balance updated: €{init_amount:,.2f} on {init_date}")
+        st.rerun()
+
+    st.divider()
 
     # Load current rules
     rules_engine = data_manager.rules_engine
