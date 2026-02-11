@@ -89,6 +89,30 @@ class DataManager:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [name, amount, category, account, frequency, start_date, description, tags, installments, end_date])
 
+    def update_recurring(self, rec_id, **kwargs):
+        """
+        Updates a recurring expense. kwargs keys must match column names.
+        """
+        if not kwargs:
+            return
+            
+        set_parts = []
+        values = []
+        
+        valid_cols = {'name', 'amount', 'category', 'account', 'frequency', 'next_date', 'description', 'tags', 'remaining_installments', 'end_date'}
+        
+        for k, v in kwargs.items():
+            if k in valid_cols:
+                set_parts.append(f"{k} = ?")
+                values.append(v)
+                
+        if not set_parts:
+            return
+            
+        values.append(rec_id)
+        q = f"UPDATE recurring_expenses SET {', '.join(set_parts)} WHERE id = ?"
+        self.con.execute(q, values)
+
     def get_recurring(self):
         return self.con.execute("SELECT * FROM recurring_expenses ORDER BY next_date").df()
 

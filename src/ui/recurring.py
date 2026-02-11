@@ -156,33 +156,114 @@ def render_recurring(data_manager: DataManager):
     
     if not rec_df.empty:
         # Display as a table with more details
-        # We can format it nicely
         
-        # Show table
-        st.dataframe(
-            rec_df[['name', 'amount', 'frequency', 'next_date', 'remaining_installments', 'end_date', 'category', 'account']],
+        # Configure columns for editing
+        column_config = {
+            "name": st.column_config.TextColumn("Name", required=True),
+            "amount": st.column_config.NumberColumn("Amount", format="€%.2f", required=True),
+            "category": st.column_config.SelectboxColumn("Category", options=data_manager.get_unique_categories() + ["Other"], required=True),
+            "account": st.column_config.SelectboxColumn("Account", options=data_manager.get_unique_accounts(), required=True),
+            "frequency": st.column_config.SelectboxColumn("Frequency", options=["Monthly", "Weekly", "Yearly"], required=True),
+            "next_date": st.column_config.DateColumn("Next Due", required=True),
+            "end_date": st.column_config.DateColumn("Ends On"),
+            "remaining_installments": st.column_config.NumberColumn("Installments Left", help="Remaining payments", min_value=0),
+            "tags": st.column_config.ListColumn("Tags"),
+            "description": st.column_config.TextColumn("Description"),
+        }
+        
+        # Show editor
+        edited_rec_df = st.data_editor(
+            rec_df,
+            column_config=column_config,
             use_container_width=True,
             hide_index=True,
-            column_config={
-                "amount": st.column_config.NumberColumn("Amount", format="€%.2f"),
-                "next_date": st.column_config.DateColumn("Next Due"),
-                "end_date": st.column_config.DateColumn("Ends On"),
-                "remaining_installments": st.column_config.NumberColumn("Installments Left", help="Remaining payments"),
-            }
+            num_rows="dynamic", # Allow add/delete
+            key="rec_editor"
         )
         
-        # Delete Action
-        col_del_1, col_del_2 = st.columns([3, 1])
-        with col_del_1:
-            rec_to_del = st.selectbox("Select Template to Remove", rec_df['name'], key='rec_del_swl')
-        with col_del_2:
-            st.write("") # Spacer
-            st.write("")
-            if st.button("🗑️ Delete", type="secondary", use_container_width=True):
-                rec_id = rec_df[rec_df['name'] == rec_to_del].iloc[0]['id']
-                data_manager.delete_recurring(rec_id)
-                st.success("Deleted!")
-                st.rerun()
+        if st.button("💾 Save Changes", type="primary"):
+            # Detect Changes
+            # Similar logic to transactions: Diff or Update All
+            # Since number of recurring expenses is small, we can just update those that changed or are new.
+            
+            changes_count = 0
+            
+            # 1. Access original DF by ID to track changes
+            # Convert to dict for fast lookup
+            
+            # --- Handle Deletions ---
+            original_ids = set(rec_df['id'].dropna())
+            current_ids = set(edited_rec_df['id'].dropna())
+            deleted_ids = original_ids - current_ids
+            
+            for d_id in deleted_ids:
+                data_manager.delete_recurring(d_id)
+                changes_count += 1
                 
+            # --- Handle Updates & New ---
+            for i, row in edited_rec_df.iterrows():
+                # Check if New (No ID)
+                if pd.isna(row.get('id')) or row.get('id') == '':
+                    # It's a new row added via UI
+                    # We need to map columns to add_recurring arguments
+                    # Ensure minimal fields
+                    if row['name']:
+                         # Handle tags
+                         tags_val = row['tags']
+                         if hasattr(tags_val, 'tolist'): tags_val = tags_val.tolist()
+                         if not isinstance(tags_val, list): tags_val = []
+                         
+                         data_manager.add_recurring(
+                             name=row['name'],
+                             amount=row['amount'],
+                             category=row.get('category', 'General'),
+                             account=row.get('account', 'Cash'),
+                             frequency=row.get('frequency', 'Monthly'),
+                             start_date=row['next_date'],
+                             description=row.get('description', ''),
+                             tags=tags_val,
+                             installments=row.get('remaining_installments'),
+                             end_date=row.get('end_date')
+                         )
+                         changes_count += 1
+                else:
+                    # It's an existing row. Check for changes.
+                    # We can compare against original row with same ID
+                    orig_row = rec_df[rec_df['id'] == row['id']].iloc[0]
+                    
+                    # Fields to check
+                    fields = ['name', 'amount', 'category', 'account', 'frequency', 'next_date', 'description', 'remaining_installments', 'end_date', 'tags']
+                    updates = {}
+                    
+                    for f in fields:
+                        val_new = row.get(f)
+                        val_old = orig_row.get(f)
+                        
+                        # Normalize for comparison
+                        if f == 'tags':
+                             if hasattr(val_new, 'tolist'): val_new = val_new.tolist()
+                             if not isinstance(val_new, list): val_new = [] if pd.isna(val_new) else [str(val_new)]
+                             
+                             if hasattr(val_old, 'tolist'): val_old = val_old.tolist()
+                             if not isinstance(val_old, list): val_old = [] if pd.isna(val_old) else [str(val_old)]
+                             
+                             if tuple(sorted(val_new)) != tuple(sorted(val_old)):
+                                 updates[f] = val_new
+                        else:
+                             # Handle NaNs
+                             if pd.isna(val_new) and pd.isna(val_old): continue
+                             if val_new != val_old:
+                                 updates[f] = val_new
+                                 
+                    if updates:
+                        data_manager.update_recurring(row['id'], **updates)
+                        changes_count += 1
+            
+            if changes_count > 0:
+                st.success(f"Saved {changes_count} changes!")
+                st.rerun()
+            else:
+                st.info("No changes detected.")
+
     else:
         st.info("No recurring expenses set up yet.")
