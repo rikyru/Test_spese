@@ -101,3 +101,67 @@ class RulesEngine:
             df.loc[mask, 'tags'] = df.loc[mask, 'tags'].apply(add_kw_tag)
             
         return df
+
+    def learn_from_history(self, history_df):
+        """
+        Builds a lookup dictionary from historical data to suggest categories.
+        Returns a dict: {description_lower: category}
+        """
+        if history_df.empty:
+            return {}
+            
+        # Group by description and find most frequent category
+        # Using exact description match for now
+        
+        # Filter where category is not null
+        valid_hist = history_df[history_df['category'].notna()].copy()
+        valid_hist['desc_clean'] = valid_hist['description'].str.strip().str.lower()
+        
+        # Get mode category for each description
+        lookup = {}
+        # Iterate unique descriptions
+        for desc in valid_hist['desc_clean'].unique():
+            if not desc: continue
+            
+            # Find rows
+            mask = valid_hist['desc_clean'] == desc
+            cats = valid_hist.loc[mask, 'category']
+            
+            if not cats.empty:
+                # Top frequent category
+                top_cat = cats.mode().iloc[0]
+                lookup[desc] = top_cat
+                
+        self.history_lookup = lookup
+        return lookup
+
+    def apply_history_rules(self, df):
+        """Applies learned categories to rows with missing categories."""
+        if not hasattr(self, 'history_lookup') or not self.history_lookup:
+            return df
+            
+        if 'category' not in df.columns:
+            df['category'] = None
+            
+        # Identify rows needing category
+        mask = df['category'].isna() | (df['category'] == '')
+        
+        def lookup_cat(desc):
+            if not isinstance(desc, str): return None
+            return self.history_lookup.get(desc.strip().lower())
+            
+        # Apply lookup
+        start_missing = mask.sum()
+        if start_missing > 0:
+            suggested = df.loc[mask, 'description'].apply(lookup_cat)
+            
+            # Fill where suggestion found
+            found_mask = suggested.notna()
+            # We need to map back to original indices
+            # df.loc[mask & found_mask_aligned, 'category'] = ...
+            # Easier: likely iterating or vectorizing carefully
+            
+            # Let's use fillna on the series
+            df.loc[mask, 'category'] = suggested
+            
+        return df

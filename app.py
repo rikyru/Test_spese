@@ -10,6 +10,7 @@ from src.ui.analysis import render_analysis
 from src.ui.settings import render_settings
 from src.ui.recurring import render_recurring
 from src.ui.split import render_split
+from src.ui.tag_manager import render_tag_manager
 from src.ui.styling import apply_custom_styles
 
 st.set_page_config(page_title="Finance Dashboard", layout="wide", page_icon="💸")
@@ -25,7 +26,7 @@ dm = st.session_state.data_manager
 
 # Sidebar Navigation
 st.sidebar.title("💰 Finance App")
-page = st.sidebar.radio("Navigate", ["Dashboard", "Analysis", "Transactions", "Recurring", "Split Expenses", "Import Data", "Settings"])
+page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "Tag Manager", "Import", "Settings"])
 
 st.sidebar.divider()
 
@@ -110,21 +111,15 @@ with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
 
 if page == "Dashboard":
     render_dashboard(dm)
-
-elif page == "Analysis":
-    render_analysis(dm)
-
 elif page == "Transactions":
     render_transactions(dm)
-
-elif page == "Recurring":
+elif page == "Recurring Expenses":
     render_recurring(dm)
-
-elif page == "Split Expenses":
+elif page == "Shared Expenses":
     render_split(dm)
-    
-elif page == "Import Data":
+elif page == "Tag Manager":
+    render_tag_manager(dm)
+elif page == "Import":
     render_importer(dm)
-
 elif page == "Settings":
     render_settings(dm)

@@ -396,6 +396,16 @@ class DataManager:
 
         # Apply Rules Engine
         df = self.rules_engine.apply_rules(df)
+        
+        # --- Smart Import: Learn from History ---
+        try:
+             # Fetch history efficiently (description and category)
+             history_df = self.con.execute("SELECT description, category FROM transactions WHERE category IS NOT NULL").df()
+             self.rules_engine.learn_from_history(history_df)
+             df = self.rules_engine.apply_history_rules(df)
+        except Exception as e:
+             print(f"Smart Import Error: {e}")
+             
         df = self.rules_engine.auto_tag_from_description(df)
 
         # Insert into DuckDB
@@ -454,3 +464,55 @@ class DataManager:
             return [r[0] for r in res if r[0]]
         except:
             return []
+
+    def update_tag(self, old_tag, new_tag):
+        """
+        Updates a tag across all transactions.
+        If new_tag is provided, replaces old_tag with new_tag.
+        If new_tag is None or empty, removes old_tag.
+        """
+        try:
+            # DuckDB list manipulation
+            # We can use list_transform or similar, but simplified:
+            # 1. Provide a User Defined Function (UDF) or use a complex update query.
+            # DuckDB's list functions are powerful.
+            # "UPDATE transactions SET tags = list_transform(tags, x -> CASE WHEN x = ? THEN ? ELSE x END) WHERE list_contains(tags, ?)"
+            
+            # Case 1: Rename (Replace)
+            if new_tag:
+                # Check if we are merging (i.e. if new_tag already exists in the list, we should remove array duplicates)
+                # But simple replace is:
+                q = """
+                    UPDATE transactions 
+                    SET tags = list_distinct(list_transform(tags, x -> CASE WHEN x = ? THEN ? ELSE x END))
+                    WHERE list_contains(tags, ?)
+                """
+                self.con.execute(q, [old_tag, new_tag, old_tag])
+                
+                # Also update recurring expenses
+                q_rec = """
+                    UPDATE recurring_expenses 
+                    SET tags = list_distinct(list_transform(tags, x -> CASE WHEN x = ? THEN ? ELSE x END))
+                    WHERE list_contains(tags, ?)
+                """
+                self.con.execute(q_rec, [old_tag, new_tag, old_tag])
+                
+            # Case 2: Delete
+            else:
+                 q = """
+                    UPDATE transactions
+                    SET tags = list_filter(tags, x -> x != ?)
+                    WHERE list_contains(tags, ?)
+                 """
+                 self.con.execute(q, [old_tag, old_tag])
+                 
+                 q_rec = """
+                    UPDATE recurring_expenses
+                    SET tags = list_filter(tags, x -> x != ?)
+                    WHERE list_contains(tags, ?)
+                 """
+                 self.con.execute(q_rec, [old_tag, old_tag])
+                 
+            return True, f"Updated tag '{old_tag}' to '{new_tag}'"
+        except Exception as e:
+            return False, str(e)
