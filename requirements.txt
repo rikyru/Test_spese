@@ -8,3 +8,4 @@ xlsxwriter
 watchdog
 python-dateutil
 pdfplumber
+easyocr
