@@ -49,7 +49,7 @@ def render_analysis(data_manager: DataManager):
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Smart Insights", "Income Analysis", "Tag Analysis", "Needs vs Wants", "Forecasting"])
     
     with tab1:
-        render_smart_insights(filtered_df)
+        render_smart_insights(df, filtered_df)
 
     with tab2:
         # Pass full df for historical context (Growth Rate), filtered_df for deep dive
@@ -68,17 +68,28 @@ def render_analysis(data_manager: DataManager):
         # If user selects "2020", forecasting "Next Month" (Jan 2021) is technically correct for that snapshot.
         render_forecasting(filtered_df)
 
-def render_smart_insights(df):
+def render_smart_insights(full_df, filtered_df):
     st.subheader("🧠 Smart Insights")
     
-    if df.empty:
+    if filtered_df.empty:
         st.info("No data available for insights.")
         return
 
-    df['date'] = pd.to_datetime(df['date'])
-    expenses = df[df['type'] == 'Expense'].copy()
+    # Use full_df for historical context (MoM, trends, projections)
+    # Use filtered_df for period-specific metrics (burn rate, merchants, etc.)
+    full_df['date'] = pd.to_datetime(full_df['date'])
+    filtered_df['date'] = pd.to_datetime(filtered_df['date'])
+    
+    # Historical data for comparisons
+    all_expenses = full_df[full_df['type'] == 'Expense'].copy()
+    all_expenses['abs_amount'] = all_expenses['amount'].abs()
+    all_expenses['month_year'] = all_expenses['date'].dt.to_period('M')
+    all_income = full_df[full_df['type'] == 'Income'].copy()
+    
+    # Filtered data for current view
+    expenses = filtered_df[filtered_df['type'] == 'Expense'].copy()
     expenses['abs_amount'] = expenses['amount'].abs()
-    income = df[df['type'] == 'Income'].copy()
+    income = filtered_df[filtered_df['type'] == 'Income'].copy()
 
     if expenses.empty:
         st.write("No expenses to analyze.")
@@ -120,7 +131,8 @@ def render_smart_insights(df):
     # ========== 2. MONTH OVER MONTH COMPARISON ==========
     st.markdown("### 📊 Confronto Mese su Mese")
     
-    monthly_totals = expenses.groupby('month_year')['abs_amount'].sum()
+    # Use ALL expenses for MoM (not just filtered)
+    monthly_totals = all_expenses.groupby('month_year')['abs_amount'].sum()
     
     if len(monthly_totals) >= 2:
         curr_total = monthly_totals.iloc[-1]
@@ -155,9 +167,11 @@ def render_smart_insights(df):
     # ========== 3. CATEGORY TRENDS (Rising / Falling) ==========
     st.markdown("### 📈 Trend Categorie")
     
-    if len(monthly_totals) >= 3:
-        last_3_months = sorted(expenses['month_year'].unique())[-3:]
-        recent = expenses[expenses['month_year'].isin(last_3_months)]
+    # Use ALL expenses for trends (need 3+ months)
+    all_monthly_totals = all_expenses.groupby('month_year')['abs_amount'].sum()
+    if len(all_monthly_totals) >= 3:
+        last_3_months = sorted(all_expenses['month_year'].unique())[-3:]
+        recent = all_expenses[all_expenses['month_year'].isin(last_3_months)]
         cat_monthly = recent.groupby(['month_year', 'category'])['abs_amount'].sum().reset_index()
         
         trends = []
@@ -292,8 +306,8 @@ def render_smart_insights(df):
         
         if total_income > 0:
             # Annualize income similarly
-            income['month_year'] = income['date'].dt.to_period('M')
-            monthly_income = income.groupby('month_year')['amount'].sum()
+            all_income['month_year'] = all_income['date'].dt.to_period('M')
+            monthly_income = all_income.groupby('month_year')['amount'].sum()
             avg_3m_income = monthly_income.iloc[-3:].mean() if len(monthly_income) >= 3 else monthly_income.mean()
             projected_annual_income = avg_3m_income * 12
             
@@ -355,12 +369,30 @@ def render_smart_insights(df):
         media=('abs_amount', 'mean')
     ).reset_index().sort_values('totale', ascending=False)
     
+    # Collect tags per merchant
+    def get_top_tags(grp):
+        all_tags = []
+        for tags in grp:
+            if isinstance(tags, list):
+                all_tags.extend(tags)
+            elif hasattr(tags, 'tolist'):
+                all_tags.extend(tags.tolist())
+        if not all_tags:
+            return ''
+        from collections import Counter
+        top = Counter(all_tags).most_common(3)
+        return ', '.join(f'#{t}' for t, _ in top)
+    
+    tag_map = expenses.groupby('description')['tags'].apply(get_top_tags)
+    merchant_stats = merchant_stats.merge(tag_map.rename('tags_str'), left_on='description', right_index=True, how='left')
+    merchant_stats['tags_str'] = merchant_stats['tags_str'].fillna('')
+    
     # Filter to meaningful merchants (at least 2 transactions)
     recurring_merchants = merchant_stats[merchant_stats['conteggio'] >= 2].head(10)
     
     if not recurring_merchants.empty:
         recurring_merchants_display = recurring_merchants.copy()
-        recurring_merchants_display.columns = ['Descrizione', 'Totale', 'Volte', 'Media']
+        recurring_merchants_display.columns = ['Descrizione', 'Totale', 'Volte', 'Media', 'Tags']
         recurring_merchants_display['Totale'] = recurring_merchants_display['Totale'].apply(lambda x: f"€{x:,.2f}")
         recurring_merchants_display['Media'] = recurring_merchants_display['Media'].apply(lambda x: f"€{x:,.2f}")
         st.dataframe(recurring_merchants_display, use_container_width=True, hide_index=True)
