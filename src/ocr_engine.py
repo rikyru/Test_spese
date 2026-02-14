@@ -8,13 +8,22 @@ class OCREngine:
     def _get_reader(self):
         """Lazy load the reader to save RAM when not in use."""
         if self.reader is None:
-            import easyocr
-            # Initialize for Italian and English
-            # gpu=False to be safe on generic hardware, or True if available (auto)
-            # We'll let it auto-detect or force CPU if safe. 
-            # safe assumption: use CPU or let library decide, but catch errors.
-            print("Loading EasyOCR model... (this may take a moment)")
-            self.reader = easyocr.Reader(['it', 'en']) 
+            try:
+                import easyocr
+            except ImportError as e:
+                raise ImportError(
+                    f"EasyOCR non disponibile: {e}. "
+                    "Se sei su Docker, verifica che il Dockerfile includa: "
+                    "libgl1, libglib2.0-0, libsm6, libxext6, libxrender1"
+                )
+            try:
+                print("Loading EasyOCR model... (this may take a moment)")
+                self.reader = easyocr.Reader(['it', 'en'], gpu=False)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Errore caricamento modello OCR: {e}. "
+                    "Possibili cause: RAM insufficiente o dipendenze di sistema mancanti."
+                )
         return self.reader
 
     def extract_transaction_data(self, image_bytes):

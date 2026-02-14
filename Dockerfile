@@ -2,10 +2,15 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies (needed for pdfplumber/cffi)
+# Install system dependencies (needed for pdfplumber/cffi + OpenCV/EasyOCR)
 RUN apt-get update && apt-get install -y \
     build-essential \
     libffi-dev \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
