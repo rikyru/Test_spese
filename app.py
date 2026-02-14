@@ -26,7 +26,7 @@ dm = st.session_state.data_manager
 
 # Sidebar Navigation
 st.sidebar.title("💰 Finance App")
-page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "Tag Manager", "Import", "Settings"])
+page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "📊 Analysis", "Tag Manager", "Import", "Settings"])
 
 st.sidebar.divider()
 
@@ -117,6 +117,8 @@ elif page == "Recurring Expenses":
     render_recurring(dm)
 elif page == "Shared Expenses":
     render_split(dm)
+elif page == "📊 Analysis":
+    render_analysis(dm)
 elif page == "Tag Manager":
     render_tag_manager(dm)
 elif page == "Import":

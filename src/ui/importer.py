@@ -10,8 +10,11 @@ from src.ui.styling import get_chart_colors
 def render_importer(data_manager: DataManager):
     st.header("Import Data")
     
-    # Check for Pending Imports
-    pending_file = "finance_data/pending_transactions.json"
+    # Check for Pending Imports — derive data dir from DB_PATH (same as DataManager)
+    db_path = os.environ.get('DB_PATH', 'finance_data/finance.duckdb')
+    data_dir = os.path.dirname(db_path) or 'finance_data'
+    os.makedirs(data_dir, exist_ok=True)
+    pending_file = os.path.join(data_dir, "pending_transactions.json")
     pending_data = []
     if os.path.exists(pending_file):
         try:
