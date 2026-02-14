@@ -17,8 +17,10 @@ class OCREngine:
                     "libgl1, libglib2.0-0, libsm6, libxext6, libxrender1"
                 )
             try:
-                print("Loading EasyOCR model... (this may take a moment)")
-                self.reader = easyocr.Reader(['it', 'en'], gpu=False)
+                print("⏳ Loading EasyOCR model... (first run downloads ~100MB, may take 1-2 minutes)")
+                print("   If models are cached this will be fast.")
+                self.reader = easyocr.Reader(['it', 'en'], gpu=False, verbose=True)
+                print("✅ EasyOCR model loaded successfully!")
             except Exception as e:
                 raise RuntimeError(
                     f"Errore caricamento modello OCR: {e}. "

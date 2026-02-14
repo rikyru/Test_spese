@@ -228,45 +228,46 @@ def render_importer(data_manager: DataManager):
             st.image(uploaded_img, caption="Preview", width=300)
             
             if st.button("🔍 Process Screenshot"):
-                with st.spinner("Initializing OCR Engine... (First run may be slow)"):
-                    try:
-                        # Initialize Engine
-                        ocr = OCREngine()
-                        st.info("OCR Engine initialized, processing image...")
-                        # Process
-                        img_bytes = uploaded_img.read()
-                        st.info(f"Image size: {len(img_bytes)} bytes")
-                        results, raw_text = ocr.extract_transaction_data(img_bytes)
+                status = st.status("Processing screenshot...", expanded=True)
+                try:
+                    status.write("⏳ Loading OCR engine (first run downloads models ~100MB)...")
+                    ocr = OCREngine()
+                    status.write("✅ OCR Engine ready!")
+                    
+                    status.write("🔍 Reading text from image...")
+                    img_bytes = uploaded_img.read()
+                    results, raw_text = ocr.extract_transaction_data(img_bytes)
+                    
+                    if results:
+                        status.update(label="✅ Done!", state="complete")
+                        st.success(f"Found {len(results)} transactions!")
                         
-                        if results:
-                            st.success(f"Found {len(results)} transactions!")
+                        # Append to pending
+                        current_pending = []
+                        if os.path.exists(pending_file):
+                            try:
+                                with open(pending_file, 'r') as f:
+                                    current_pending = json.load(f)
+                            except:
+                                pass
+                        
+                        current_pending.extend(results)
+                        
+                        with open(pending_file, 'w') as f:
+                            json.dump(current_pending, f, indent=4)
                             
-                            # Append to pending
-                            current_pending = []
-                            if os.path.exists(pending_file):
-                                try:
-                                    with open(pending_file, 'r') as f:
-                                        current_pending = json.load(f)
-                                except:
-                                    pass
-                            
-                            # Add new results
-                            current_pending.extend(results)
-                            
-                            with open(pending_file, 'w') as f:
-                                json.dump(current_pending, f, indent=4)
-                                
-                            st.toast("Transactions added to Review Queue!", icon="🚀")
-                            st.rerun()
-                        else:
-                            st.warning("No transactions found. Try cropping the image to just the list.")
-                            with st.expander("Show Debug (Raw Text)"):
-                                st.write(raw_text)
-                                st.caption("If you see the text here but it wasn't captured, copy this and send it to me!")
-                            
-                    except Exception as e:
-                        import traceback
-                        st.error(f"OCR Error: {e}")
-                        with st.expander("Error Details"):
-                            st.code(traceback.format_exc())
-
+                        st.toast("Transactions added to Review Queue!", icon="🚀")
+                        st.rerun()
+                    else:
+                        status.update(label="⚠️ No transactions found", state="complete")
+                        st.warning("No transactions found. Try cropping the image to just the list.")
+                        with st.expander("Show Debug (Raw Text)"):
+                            st.write(raw_text)
+                            st.caption("If you see the text here but it wasn't captured, copy this and send it to me!")
+                        
+                except Exception as e:
+                    import traceback
+                    status.update(label="❌ Error", state="error")
+                    st.error(f"OCR Error: {e}")
+                    with st.expander("Error Details"):
+                        st.code(traceback.format_exc())

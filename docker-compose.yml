@@ -9,6 +9,8 @@ services:
     volumes:
       # Map the data folder on host to /app/data in container
       - ./finance_data:/app/data
+      # Persist EasyOCR models so they don't re-download on every rebuild
+      - ./ocr_models:/root/.EasyOCR
     environment:
       - DB_PATH=/app/data/finance.duckdb
       - RULES_PATH=/app/data/rules.yaml
