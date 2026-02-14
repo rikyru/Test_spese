@@ -265,11 +265,11 @@ def render_smart_insights(full_df, filtered_df):
     st.markdown("### 🔄 Costo Abbonamenti")
     
     # Find transactions with 'abbonamento' tag
-    sub_mask = df['tags'].apply(
+    sub_mask = filtered_df['tags'].apply(
         lambda t: 'abbonamento' in (t if isinstance(t, list) else 
                                      t.tolist() if hasattr(t, 'tolist') else [])
     )
-    subs = df[sub_mask & (df['type'] == 'Expense')].copy()
+    subs = filtered_df[sub_mask & (filtered_df['type'] == 'Expense')].copy()
     
     if not subs.empty:
         subs['abs_amount'] = subs['amount'].abs()

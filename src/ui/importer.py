@@ -232,8 +232,11 @@ def render_importer(data_manager: DataManager):
                     try:
                         # Initialize Engine
                         ocr = OCREngine()
+                        st.info("OCR Engine initialized, processing image...")
                         # Process
-                        results, raw_text = ocr.extract_transaction_data(uploaded_img.read())
+                        img_bytes = uploaded_img.read()
+                        st.info(f"Image size: {len(img_bytes)} bytes")
+                        results, raw_text = ocr.extract_transaction_data(img_bytes)
                         
                         if results:
                             st.success(f"Found {len(results)} transactions!")
@@ -262,5 +265,8 @@ def render_importer(data_manager: DataManager):
                                 st.caption("If you see the text here but it wasn't captured, copy this and send it to me!")
                             
                     except Exception as e:
+                        import traceback
                         st.error(f"OCR Error: {e}")
+                        with st.expander("Error Details"):
+                            st.code(traceback.format_exc())
 
