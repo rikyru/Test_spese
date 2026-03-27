@@ -26,7 +26,19 @@ dm = st.session_state.data_manager
 
 # Sidebar Navigation
 st.sidebar.title("💰 Finance App")
+
+# Global Search — overrides page to Transactions
+global_search = st.sidebar.text_input("🔍 Search", placeholder="Cerca transazioni...")
+if global_search:
+    st.session_state['global_search'] = global_search
+elif 'global_search' not in st.session_state:
+    st.session_state['global_search'] = ''
+
 page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "📊 Analysis", "Tag Manager", "Import", "Settings"])
+
+# If there's an active search, force Transactions page
+if global_search:
+    page = "Transactions"
 
 st.sidebar.divider()
 

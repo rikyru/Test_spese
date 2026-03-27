@@ -61,7 +61,10 @@ class DataManager:
             if 'id' not in col_names:
                 self.con.execute("ALTER TABLE transactions ADD COLUMN id VARCHAR")
                 self.con.execute("UPDATE transactions SET id = uuid() WHERE id IS NULL")
-                
+
+            if 'notes' not in col_names:
+                self.con.execute("ALTER TABLE transactions ADD COLUMN notes VARCHAR")
+
         except Exception as e:
             print(f"Migration error: {e}")
 

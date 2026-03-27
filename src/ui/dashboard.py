@@ -11,7 +11,7 @@ def render_dashboard(data_manager):
     st.header("Dashboard v2.0")
     
     # Load rules for icons
-    re = RulesEngine("d:/Test_spese/rules.yaml") # Should probably inject this, but direct load is fine
+    re = RulesEngine()
     wallet_rules = re.rules.get('wallets', {})
     
     try:
@@ -27,38 +27,41 @@ def render_dashboard(data_manager):
 
         # Sidebar Filters
         st.sidebar.subheader("Filters")
-        
+
         # Date Filter
         min_date = df['date'].min().date()
         max_date = df['date'].max().date()
-        
+
         filter_mode = st.sidebar.radio("Period", ["Year", "Month", "Custom", "All Time"], index=1)
-        
+
         filtered_df = df.copy()
-        
+        selected_year = None
+        selected_month = None
+
         if filter_mode == "Year":
             selected_year = st.sidebar.selectbox("Select Year", sorted(df['year'].unique(), reverse=True))
             filtered_df = df[df['year'] == selected_year]
             st.caption(f"Showing data for Year: {selected_year}")
-            
+
         elif filter_mode == "Month":
             # Default to current month if logical
             today = datetime.date.today()
             default_month_idx = today.month - 1
-            
+
             # Years: Union of DB years and Current Year
             available_years = sorted(list(set(df['year'].unique()) | {today.year}), reverse=True)
-            
+
             # Default index: try to find today.year
             default_year_idx = 0
             if today.year in available_years:
                 default_year_idx = available_years.index(today.year)
-            
+
             selected_year = st.sidebar.selectbox("Select Year", available_years, index=default_year_idx)
             selected_month = st.sidebar.selectbox("Select Month", range(1, 13), index=default_month_idx)
             filtered_df = df[(df['year'] == selected_year) & (df['month'] == selected_month)]
-            st.caption(f"Showing data for: {selected_month}/{selected_year}")
-            
+            month_names = {1:"Gen",2:"Feb",3:"Mar",4:"Apr",5:"Mag",6:"Giu",7:"Lug",8:"Ago",9:"Set",10:"Ott",11:"Nov",12:"Dic"}
+            st.caption(f"Showing data for: {month_names.get(selected_month, selected_month)} {selected_year}")
+
         elif filter_mode == "Custom":
             start_date = st.sidebar.date_input("Start Date", min_date)
             end_date = st.sidebar.date_input("End Date", max_date)
@@ -66,6 +69,12 @@ def render_dashboard(data_manager):
                 filtered_df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
             else:
                 st.error("Start date must be before end date.")
+
+        # Account Filter
+        all_accounts = sorted(df['account'].dropna().unique().tolist())
+        account_filter = st.sidebar.multiselect("Filter Account", options=all_accounts)
+        if account_filter:
+            filtered_df = filtered_df[filtered_df['account'].isin(account_filter)]
         
         # --- 0. Liquidity Overview (New) ---
         st.divider()
@@ -184,10 +193,37 @@ def render_dashboard(data_manager):
         
         # Metric: "Monthly Fixed Commitment"
         
+        # MoM delta (only in Month mode)
+        delta_income = None
+        delta_expense = None
+        delta_balance = None
+        if filter_mode == "Month" and selected_year is not None and selected_month is not None:
+            prev_m = selected_month - 1 if selected_month > 1 else 12
+            prev_y = selected_year if selected_month > 1 else selected_year - 1
+            prev_df = df[(df['year'] == prev_y) & (df['month'] == prev_m)]
+            if account_filter:
+                prev_df = prev_df[prev_df['account'].isin(account_filter)]
+            prev_income = prev_df[prev_df['type'] == 'Income']['amount'].sum()
+            prev_expense = prev_df[prev_df['type'] == 'Expense']['amount'].sum()
+            prev_balance = prev_income + prev_expense
+            if prev_income != 0:
+                diff_inc = total_income - prev_income
+                sign = '+' if diff_inc >= 0 else '-'
+                delta_income = f"{sign}€{abs(diff_inc):,.2f} vs mese prec."
+            if prev_expense != 0:
+                # Use absolute values: positive = spent more (bad), negative = spent less (good)
+                diff_exp = abs(total_expense) - abs(prev_expense)
+                sign = '+' if diff_exp >= 0 else '-'
+                delta_expense = f"{sign}€{abs(diff_exp):,.2f} vs mese prec."
+            if prev_balance != 0:
+                diff_bal = balance - prev_balance
+                sign = '+' if diff_bal >= 0 else '-'
+                delta_balance = f"{sign}€{abs(diff_bal):,.2f} vs mese prec."
+
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Income", f"€{total_income:,.2f}")
-        col2.metric("Expenses", f"€{total_expense:,.2f}", delta_color="inverse")
-        col3.metric("Net Balance", f"€{balance:,.2f}", help="Current Actual Balance")
+        col1.metric("Income", f"€{total_income:,.2f}", delta=delta_income)
+        col2.metric("Expenses", f"€{total_expense:,.2f}", delta=delta_expense, delta_color="inverse")
+        col3.metric("Net Balance", f"€{balance:,.2f}", delta=delta_balance, help="Current Actual Balance")
         
         # New Metric: Disposable / Free
         # If we are in a specific month, we can project.
@@ -261,11 +297,16 @@ def render_dashboard(data_manager):
             st.subheader("Income Sources")
             income_df = filtered_df[filtered_df['type'] == 'Income']
             if not income_df.empty:
-                # Group by Category if available, else Description
-                # Usually Income has fewer categories.
                 income_by_cat = income_df.groupby('category')['amount'].sum().reset_index()
                 fig_inc = px.pie(income_by_cat, values='amount', names='category', hole=0.4)
-                st.plotly_chart(fig_inc, use_container_width=True)
+                inc_event = st.plotly_chart(fig_inc, use_container_width=True, on_select="rerun", key="pie_income")
+                # Drill-down
+                if inc_event and inc_event.selection and inc_event.selection.points:
+                    sel_cat = inc_event.selection.points[0].get('label')
+                    if sel_cat:
+                        st.markdown(f"**Transactions — {sel_cat}**")
+                        drill = income_df[income_df['category'] == sel_cat][['date','description','amount','tags']].sort_values('date', ascending=False)
+                        st.dataframe(drill, use_container_width=True, hide_index=True)
             else:
                 st.info("No income data for this period.")
 
@@ -273,13 +314,18 @@ def render_dashboard(data_manager):
             st.subheader("Expense Categories")
             expense_df = filtered_df[filtered_df['type'] == 'Expense']
             if not expense_df.empty:
-                # Use absolute values for charts
                 expense_df = expense_df.copy()
                 expense_df['abs_amount'] = expense_df['amount'].abs()
-                
                 exp_by_cat = expense_df.groupby('category')['abs_amount'].sum().reset_index().sort_values('abs_amount', ascending=False)
                 fig_exp = px.pie(exp_by_cat, values='abs_amount', names='category', hole=0.4)
-                st.plotly_chart(fig_exp, use_container_width=True)
+                exp_event = st.plotly_chart(fig_exp, use_container_width=True, on_select="rerun", key="pie_expense")
+                # Drill-down
+                if exp_event and exp_event.selection and exp_event.selection.points:
+                    sel_cat = exp_event.selection.points[0].get('label')
+                    if sel_cat:
+                        st.markdown(f"**Transactions — {sel_cat}**")
+                        drill = expense_df[expense_df['category'] == sel_cat][['date','description','amount','tags']].sort_values('date', ascending=False)
+                        st.dataframe(drill, use_container_width=True, hide_index=True)
             else:
                 st.info("No expense data for this period.")
 
@@ -458,6 +504,22 @@ def render_dashboard(data_manager):
                  st.error(f"Error showing yearly context: {e}")
 
         st.divider()
+
+        # Budget Progress Bars
+        budgets = re.rules.get('budgets', {})
+        if budgets and not expense_df.empty:
+            st.subheader("🎯 Budget Progress")
+            budget_cols = st.columns(min(len(budgets), 3))
+            for idx, (cat, budget_amt) in enumerate(budgets.items()):
+                spent = expense_df[expense_df['category'] == cat]['abs_amount'].sum() if not expense_df.empty else 0.0
+                pct = min(spent / budget_amt, 1.0) if budget_amt > 0 else 0.0
+                status = "🔴" if pct >= 0.9 else ("🟡" if pct >= 0.7 else "🟢")
+                with budget_cols[idx % min(len(budgets), 3)]:
+                    with st.container(border=True):
+                        st.markdown(f"{status} **{cat}**")
+                        st.markdown(f"€{spent:,.2f} / €{budget_amt:,.2f}")
+                        st.progress(pct, text=f"{pct*100:.0f}%")
+            st.divider()
 
         # 5. Clear Data Tables
         st.subheader("📊 Detailed Breakdowns")

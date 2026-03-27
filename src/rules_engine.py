@@ -31,9 +31,9 @@ class RulesEngine:
         if df.empty:
             return df
 
-        # Default necessity
-        if 'necessity' not in df.columns:
-            df['necessity'] = 'Want' # Default to Want
+        # Reset necessity to Want for all rows before applying rules
+        # (ensures stale values from old/deleted rules don't persist)
+        df['necessity'] = 'Want'
 
         # Apply Category Rules
         # Rule format: { 'name': 'Groceries', 'match': ['coop', 'conad'] }
@@ -53,30 +53,53 @@ class RulesEngine:
                     if necessity:
                         df.loc[mask, 'necessity'] = necessity
 
-        # Apply Tag Rules
+        # Apply Tag Rules (description-based tagging)
         # Rule format: { 'tag': 'subscription', 'match': ['netflix', 'spotify'] }
         if 'tags' in self.rules:
             for tag_rule in self.rules['tags']:
                 tag_name = tag_rule.get('tag')
                 patterns = tag_rule.get('match', [])
-                
+
                 full_regex = '|'.join(patterns)
                 if full_regex:
                     mask = df['description'].str.contains(full_regex, case=False, na=False, regex=True)
-                    
-                    # Append tag to list
-                    # Handle possibility of row_tags being numpy array (from DuckDB) or list
+
                     def add_tag(row_tags):
                         if hasattr(row_tags, 'tolist'):
                             row_tags = row_tags.tolist()
                         if not isinstance(row_tags, list):
                             row_tags = list(row_tags) if row_tags is not None else []
-                            
                         if tag_name not in row_tags:
                             row_tags.append(tag_name)
                         return row_tags
 
                     df.loc[mask, 'tags'] = df.loc[mask, 'tags'].apply(add_tag)
+
+        # --- Necessity by Category ---
+        # Build map from existing category rules + manual category_necessity overrides
+        cat_necessity_map = {
+            r['name']: r['necessity']
+            for r in self.rules.get('categories', [])
+            if r.get('necessity')
+        }
+        cat_necessity_map.update(self.rules.get('category_necessity', {}))
+
+        if cat_necessity_map:
+            for cat, nec in cat_necessity_map.items():
+                mask = df['category'] == cat
+                df.loc[mask, 'necessity'] = nec
+
+        # --- Necessity by Tag ---
+        tag_necessity_map = self.rules.get('tag_necessity', {})
+        if tag_necessity_map:
+            def get_tags_list(t):
+                if isinstance(t, list): return t
+                if hasattr(t, 'tolist'): return t.tolist()
+                return []
+
+            for tag, nec in tag_necessity_map.items():
+                mask = df['tags'].apply(lambda t, _tag=tag: _tag in get_tags_list(t))
+                df.loc[mask, 'necessity'] = nec
 
         return df
 

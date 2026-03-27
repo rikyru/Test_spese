@@ -102,7 +102,139 @@ def render_settings(data_manager: DataManager):
                     st.rerun()
 
     st.divider()
-    
+
+    # --- Necessity by Category & Tag ---
+    st.subheader("⚖️ Necessity Rules")
+    st.caption("Classifica categorie e tag come **Need** (bisogno) o **Want** (desiderio). Verrà applicato ad ogni transazione corrispondente.")
+
+    # Fetch transaction counts for context
+    try:
+        cat_counts = data_manager.con.execute(
+            "SELECT category, COUNT(*) as cnt FROM transactions WHERE category IS NOT NULL GROUP BY category"
+        ).df().set_index('category')['cnt'].to_dict()
+    except Exception:
+        cat_counts = {}
+
+    try:
+        tag_counts_rows = data_manager.con.execute(
+            "SELECT tag, COUNT(*) as cnt FROM (SELECT unnest(tags) as tag FROM transactions) t WHERE tag IS NOT NULL GROUP BY tag"
+        ).fetchall()
+        tag_counts = {r[0]: r[1] for r in tag_counts_rows if r[0]}
+    except Exception:
+        tag_counts = {}
+
+    db_cats = data_manager.get_unique_categories()
+    rule_cats = [c['name'] for c in current_rules.get('categories', [])]
+    all_cats = sorted(set(db_cats + rule_cats))
+
+    cat_necessity_map = current_rules.get('category_necessity', {})
+    for r in current_rules.get('categories', []):
+        if r.get('necessity') and r['name'] not in cat_necessity_map:
+            cat_necessity_map[r['name']] = r['necessity']
+
+    db_tags = data_manager.get_unique_tags()
+    tag_necessity_map = current_rules.get('tag_necessity', {})
+
+    nec_tab1, nec_tab2 = st.tabs([f"📂 Categorie ({len(all_cats)})", f"🏷️ Tag ({len(db_tags)})"])
+
+    def _nec_badge(nec):
+        if nec == 'Need':
+            return '<span style="background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:2px 8px;font-size:0.75em;font-weight:600;">✅ NEED</span>'
+        return '<span style="background:#fff3e0;color:#e65100;border-radius:4px;padding:2px 8px;font-size:0.75em;font-weight:600;">🛍️ WANT</span>'
+
+    with nec_tab1:
+        new_cat_necessity = {}
+
+        # Summary bar
+        n_need = sum(1 for c in all_cats if cat_necessity_map.get(c, 'Want') == 'Need')
+        n_want = len(all_cats) - n_need
+        st.markdown(
+            f'<div style="margin-bottom:12px">'
+            f'<span style="background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:3px 10px;font-weight:600;margin-right:8px;">✅ Need: {n_need}</span>'
+            f'<span style="background:#fff3e0;color:#e65100;border-radius:4px;padding:3px 10px;font-weight:600;">🛍️ Want: {n_want}</span>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        n_cols = 3
+        rows = [all_cats[i:i+n_cols] for i in range(0, len(all_cats), n_cols)]
+        for row_cats in rows:
+            cols = st.columns(n_cols)
+            for col, cat in zip(cols, row_cats):
+                with col:
+                    current_nec = cat_necessity_map.get(cat, 'Want')
+                    count = cat_counts.get(cat, 0)
+                    border = "#4CAF50" if current_nec == 'Need' else "#FF7043"
+                    st.markdown(
+                        f'<div style="border-left:4px solid {border};padding:4px 10px;border-radius:0 6px 6px 0;background:{"#f9fbe7" if current_nec=="Need" else "#fff8f5"};margin-bottom:2px">'
+                        f'<strong style="font-size:0.9em">{cat}</strong><br>'
+                        f'<span style="color:#888;font-size:0.75em">{count} transazioni</span>&nbsp;'
+                        f'{_nec_badge(current_nec)}'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                    val = st.radio("", ['Need', 'Want'],
+                                   index=0 if current_nec == 'Need' else 1,
+                                   key=f"catnec_{cat}",
+                                   horizontal=True,
+                                   label_visibility="collapsed")
+                    new_cat_necessity[cat] = val
+
+        if st.button("💾 Salva Necessity Categorie", type="primary"):
+            current_rules['category_necessity'] = new_cat_necessity
+            rules_engine.save_rules(current_rules)
+            st.success(f"Salvato! {sum(1 for v in new_cat_necessity.values() if v=='Need')} Need · {sum(1 for v in new_cat_necessity.values() if v=='Want')} Want")
+            st.rerun()
+
+    with nec_tab2:
+        new_tag_necessity = {}
+
+        if not db_tags:
+            st.info("Nessun tag trovato nel database.")
+        else:
+            n_need_t = sum(1 for t in db_tags if tag_necessity_map.get(t, 'Want') == 'Need')
+            n_want_t = len(db_tags) - n_need_t
+            st.markdown(
+                f'<div style="margin-bottom:12px">'
+                f'<span style="background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:3px 10px;font-weight:600;margin-right:8px;">✅ Need: {n_need_t}</span>'
+                f'<span style="background:#fff3e0;color:#e65100;border-radius:4px;padding:3px 10px;font-weight:600;">🛍️ Want: {n_want_t}</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+            n_cols = 4
+            sorted_tags = sorted(db_tags)
+            rows = [sorted_tags[i:i+n_cols] for i in range(0, len(sorted_tags), n_cols)]
+            for row_tags in rows:
+                cols = st.columns(n_cols)
+                for col, tag in zip(cols, row_tags):
+                    with col:
+                        current_nec = tag_necessity_map.get(tag, 'Want')
+                        count = tag_counts.get(tag, 0)
+                        border = "#4CAF50" if current_nec == 'Need' else "#FF7043"
+                        st.markdown(
+                            f'<div style="border-left:4px solid {border};padding:4px 10px;border-radius:0 6px 6px 0;background:{"#f9fbe7" if current_nec=="Need" else "#fff8f5"};margin-bottom:2px">'
+                            f'<strong style="font-size:0.9em">#{tag}</strong><br>'
+                            f'<span style="color:#888;font-size:0.75em">{count} transazioni</span>&nbsp;'
+                            f'{_nec_badge(current_nec)}'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+                        val = st.radio("", ['Need', 'Want'],
+                                       index=0 if current_nec == 'Need' else 1,
+                                       key=f"tagnec_{tag}",
+                                       horizontal=True,
+                                       label_visibility="collapsed")
+                        new_tag_necessity[tag] = val
+
+            if st.button("💾 Salva Necessity Tag", type="primary"):
+                current_rules['tag_necessity'] = new_tag_necessity
+                rules_engine.save_rules(current_rules)
+                st.success(f"Salvato! {sum(1 for v in new_tag_necessity.values() if v=='Need')} Need · {sum(1 for v in new_tag_necessity.values() if v=='Want')} Want")
+                st.rerun()
+
+    st.divider()
+
     st.subheader("Advanced Actions")
     
     col_adv_1, col_adv_2 = st.columns(2)
@@ -113,21 +245,30 @@ def render_settings(data_manager: DataManager):
                  try:
                      df = data_manager.get_transactions()
                      if not df.empty:
-                         # Re-apply rules
+                         before_cat = df[['id', 'category', 'necessity']].copy()
+
+                         # Re-apply rules in memory
                          df = rules_engine.apply_rules(df)
                          df = rules_engine.auto_tag_from_description(df)
-                         
-                         # Write back
-                         data_manager.con.execute("DELETE FROM transactions")
-                         
-                         if 'necessity' not in df.columns:
-                            df['necessity'] = 'Want'
-                         
-                         # Ensure ID exists, if not generate (though it should from get_transactions)
-                         # But wait, df comes from get_transactions so it has id.
-                         data_manager.con.execute("INSERT INTO transactions SELECT date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity, id FROM df")
-                         
-                         st.success("Rules applied successfully!")
+
+                         if 'notes' not in df.columns:
+                             df['notes'] = None
+
+                         # Count what changed
+                         changed_cat = (df['category'] != before_cat['category']).sum()
+                         changed_nec = (df['necessity'] != before_cat['necessity']).sum()
+
+                         # Wrap DELETE + INSERT in a transaction to avoid data loss on failure
+                         data_manager.con.execute("BEGIN TRANSACTION")
+                         try:
+                             data_manager.con.execute("DELETE FROM transactions")
+                             data_manager.con.execute("INSERT INTO transactions SELECT date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity, id, notes FROM df")
+                             data_manager.con.execute("COMMIT")
+                         except Exception as inner_e:
+                             data_manager.con.execute("ROLLBACK")
+                             raise inner_e
+
+                         st.success(f"Rules applied to {len(df)} transactions — {changed_cat} categorie aggiornate, {changed_nec} necessity aggiornate.")
                      else:
                          st.warning("No data to process.")
                  except Exception as e:
@@ -256,7 +397,41 @@ def render_settings(data_manager: DataManager):
     st.divider()
 
 
-    
+
+
+    st.divider()
+
+    # --- Budget per Category ---
+    st.subheader("🎯 Budget Mensile per Categoria")
+    st.info("Imposta un budget mensile per categoria. Verrà mostrato come progress bar nella Dashboard.")
+
+    budgets = current_rules.get('budgets', {})
+    db_cats = data_manager.get_unique_categories()
+    rule_cats = [c['name'] for c in current_rules.get('categories', [])]
+    all_cats = sorted(set(db_cats + rule_cats))
+
+    if all_cats:
+        updated_budgets = {}
+        n_cols = 3
+        rows = [all_cats[i:i+n_cols] for i in range(0, len(all_cats), n_cols)]
+        for row_cats in rows:
+            cols = st.columns(n_cols)
+            for col, cat in zip(cols, row_cats):
+                current_val = float(budgets.get(cat, 0.0))
+                val = col.number_input(f"{cat}", value=current_val, step=50.0, min_value=0.0, key=f"budget_{cat}")
+                if val > 0:
+                    updated_budgets[cat] = val
+
+        if st.button("💾 Save Budgets"):
+            current_rules['budgets'] = updated_budgets
+            rules_engine.save_rules(current_rules)
+            st.success(f"Budgets salvati per {len(updated_budgets)} categorie.")
+            st.rerun()
+    else:
+        st.warning("Nessuna categoria trovata. Importa dei dati o crea categorie prima.")
+
+    st.divider()
+
     # --- Backup & Export ---
     st.subheader("📦 Backup & Export")
     st.write("Download a ZIP file containing all your transactions formatted as CSVs.")
