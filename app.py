@@ -121,6 +121,38 @@ with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
             else:
                 st.warning("Amount must be > 0")
 
+st.sidebar.divider()
+
+# Backup & Restore
+with st.sidebar.expander("💾 Backup & Ripristino", expanded=False):
+    zip_data = dm.export_backup_zip()
+    st.download_button(
+        label="⬇️ Esporta Backup",
+        data=zip_data,
+        file_name=f"finance_backup_{datetime.today().strftime('%Y%m%d')}.zip",
+        mime="application/zip",
+        use_container_width=True,
+        key="sidebar_export_btn"
+    )
+    st.caption("Ripristina da un backup:")
+    uploaded_zip = st.file_uploader("Carica ZIP", type="zip", key="sidebar_zip_import", label_visibility="collapsed")
+    if uploaded_zip:
+        if st.button("📥 Importa", key="sidebar_import_btn", use_container_width=True):
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+                tmp.write(uploaded_zip.getbuffer())
+                tmp_path = tmp.name
+            success, msg = dm.ingest_zip(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+            if success:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
 if page == "Dashboard":
     render_dashboard(dm)
 elif page == "Transactions":

@@ -46,7 +46,7 @@ def render_analysis(data_manager: DataManager):
         else:
             st.error("Start date must be before end date.")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Smart Insights", "Income Analysis", "Tag Analysis", "Needs vs Wants", "Forecasting"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Smart Insights", "Income Analysis", "Tag Analysis", "Needs vs Wants", "Forecasting", "📅 Anno vs Anno"])
 
     with tab1:
         render_smart_insights(df, filtered_df, data_manager)
@@ -61,7 +61,10 @@ def render_analysis(data_manager: DataManager):
         render_needs_vs_wants(df, filtered_df)
 
     with tab5:
-        render_forecasting(filtered_df)
+        render_forecasting(filtered_df, df)
+
+    with tab6:
+        render_yoy_comparison(df)
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +680,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
 # FORECASTING
 # ---------------------------------------------------------------------------
 
-def render_forecasting(df):
+def render_forecasting(df, full_df=None):
     st.subheader("📈 Forecasting")
 
     df = df.copy()
@@ -807,6 +810,192 @@ def render_forecasting(df):
         st.dataframe(cf_df[['Categoria', 'Ultimo Mese', 'Previsione', 'Variazione', 'Trend']],
                      use_container_width=True, hide_index=True)
 
+    # --- Scenario Fine Anno ---
+    if full_df is not None:
+        render_year_scenario(full_df)
+
+
+# ---------------------------------------------------------------------------
+# SCENARIO FINE ANNO
+# ---------------------------------------------------------------------------
+
+def render_year_scenario(full_df):
+    from datetime import date as date_type
+    st.divider()
+    st.subheader("🎯 Scenario Fine Anno")
+
+    today = date_type.today()
+    current_year = today.year
+
+    df = full_df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+
+    ytd = df[(df['date'].dt.year == current_year) & (df['date'].dt.date <= today)]
+
+    if ytd.empty:
+        st.info(f"Nessun dato disponibile per il {current_year}.")
+        return
+
+    months_elapsed = max(len(ytd['date'].dt.to_period('M').unique()), 1)
+    remaining_months = 12 - today.month  # mesi interi rimanenti dopo questo mese
+
+    ytd_income = ytd[ytd['type'] == 'Income']['amount'].sum()
+    ytd_needs = ytd[(ytd['type'] == 'Expense') & (ytd['necessity'] == 'Need')]['amount'].abs().sum()
+    ytd_wants = ytd[(ytd['type'] == 'Expense') & (ytd['necessity'] == 'Want')]['amount'].abs().sum()
+    ytd_other_exp = ytd[(ytd['type'] == 'Expense') & (~ytd['necessity'].isin(['Need', 'Want']))]['amount'].abs().sum()
+
+    avg_income = ytd_income / months_elapsed
+    avg_needs = ytd_needs / months_elapsed
+    avg_wants = ytd_wants / months_elapsed
+
+    # Quanto manca nel mese corrente (frazione del mese rimanente)
+    days_in_month = (pd.Timestamp(today.year, today.month, 1) + pd.DateOffset(months=1) - pd.Timestamp(today.year, today.month, 1)).days
+    days_elapsed_this_month = today.day
+    month_fraction_remaining = (days_in_month - days_elapsed_this_month) / days_in_month
+
+    # Proiezione: mesi rimanenti completi + resto del mese corrente
+    proj_months = remaining_months + month_fraction_remaining
+
+    proj_income = avg_income * proj_months
+    proj_needs = avg_needs * proj_months
+    proj_wants_base = avg_wants * proj_months
+
+    ytd_net = ytd_income - ytd_needs - ytd_wants - ytd_other_exp
+    proj_net_base = proj_income - proj_needs - proj_wants_base
+    fy_net_base = ytd_net + proj_net_base
+
+    st.caption(f"Basato su {months_elapsed} mesi di dati YTD ({current_year}). Proiezione per i restanti {remaining_months} mesi completi + {int(month_fraction_remaining * 100)}% del mese corrente.")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Entrata Media/Mese (YTD)", f"€{avg_income:,.0f}")
+    col2.metric("Need Media/Mese (YTD)", f"€{avg_needs:,.0f}")
+    col3.metric("Want Media/Mese (YTD)", f"€{avg_wants:,.0f}")
+
+    st.divider()
+
+    # Scenario builder
+    st.markdown("### ➕ Aggiungi Spese Straordinarie")
+    st.caption("Simula spese una-tantum per vedere l'impatto a fine anno (es. vacanze, regalo matrimonio, acquisto device...)")
+
+    if 'year_scenarios' not in st.session_state:
+        st.session_state['year_scenarios'] = []
+
+    future_months = [pd.Timestamp(current_year, m, 1).strftime('%B %Y')
+                     for m in range(today.month, 13)]
+    future_month_nums = list(range(today.month, 13))
+
+    with st.form("scenario_add_form", clear_on_submit=True):
+        col_a, col_b, col_c = st.columns([3, 2, 2])
+        sc_name = col_a.text_input("Descrizione", placeholder="es. Regalo matrimonio")
+        sc_amount = col_b.number_input("Importo €", min_value=0.0, step=10.0)
+        sc_month_label = col_c.selectbox("Mese", future_months)
+        if st.form_submit_button("➕ Aggiungi", use_container_width=False):
+            if sc_name and sc_amount > 0:
+                sc_month_num = future_month_nums[future_months.index(sc_month_label)]
+                st.session_state['year_scenarios'].append({
+                    'nome': sc_name,
+                    'importo': sc_amount,
+                    'mese': sc_month_num,
+                    'mese_label': sc_month_label
+                })
+                st.rerun()
+
+    if st.session_state['year_scenarios']:
+        st.markdown("**Spese aggiunte:**")
+        for i, sc in enumerate(st.session_state['year_scenarios']):
+            col_x, col_y = st.columns([5, 1])
+            col_x.markdown(f"- **{sc['nome']}** — €{sc['importo']:,.0f} ({sc['mese_label']})")
+            if col_y.button("🗑️", key=f"del_sc_{i}"):
+                st.session_state['year_scenarios'].pop(i)
+                st.rerun()
+
+        total_extra = sum(sc['importo'] for sc in st.session_state['year_scenarios'])
+        fy_net_scenario = fy_net_base - total_extra
+
+        st.divider()
+        st.markdown("### 📊 Risultato Simulazione")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Risparmio Fine Anno (Baseline)", f"€{fy_net_base:,.0f}",
+                    delta_color="normal")
+        col2.metric("Spese Extra Totali", f"€{total_extra:,.0f}",
+                    delta=f"-€{total_extra:,.0f}", delta_color="inverse")
+        col3.metric("Risparmio Fine Anno (Scenario)", f"€{fy_net_scenario:,.0f}",
+                    delta=f"€{fy_net_scenario - fy_net_base:,.0f}", delta_color="normal")
+
+        if fy_net_scenario < 0:
+            st.error(f"⚠️ Con queste spese extra andresti in rosso di €{abs(fy_net_scenario):,.0f} a fine anno.")
+        elif fy_net_scenario < fy_net_base * 0.5:
+            st.warning(f"📉 Le spese extra dimezzano quasi il risparmio previsto.")
+        else:
+            st.success(f"✅ Puoi permetterti queste spese mantenendo un risparmio di €{fy_net_scenario:,.0f}.")
+    else:
+        st.divider()
+        st.markdown("### 📊 Proiezione Baseline")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Entrate Proiettate (resto anno)", f"€{proj_income:,.0f}")
+        col2.metric("Spese Proiettate (resto anno)", f"€{proj_needs + proj_wants_base:,.0f}")
+        col3.metric("Risparmio Stimato Fine Anno", f"€{fy_net_base:,.0f}",
+                    delta_color="normal")
+        if fy_net_base > 0:
+            st.success(f"🎯 A questo ritmo finirai l'anno con un risparmio netto di **€{fy_net_base:,.0f}**.")
+        else:
+            st.error(f"⚠️ A questo ritmo finirai l'anno con un deficit di **€{abs(fy_net_base):,.0f}**.")
+
+    # Chart mensile proiezione
+    st.divider()
+    st.markdown("### 📈 Cashflow Mensile Proiettato")
+
+    chart_rows = []
+    month_names_it = {1:'Gen', 2:'Feb', 3:'Mar', 4:'Apr', 5:'Mag', 6:'Giu',
+                      7:'Lug', 8:'Ago', 9:'Set', 10:'Ott', 11:'Nov', 12:'Dic'}
+
+    # Mesi passati (YTD)
+    for m in range(1, today.month + 1):
+        m_df = ytd[ytd['date'].dt.month == m]
+        inc = m_df[m_df['type'] == 'Income']['amount'].sum()
+        exp = m_df[m_df['type'] == 'Expense']['amount'].abs().sum()
+        chart_rows.append({'mese': month_names_it[m], 'num': m,
+                           'entrate': inc, 'spese': exp,
+                           'tipo': 'Storico'})
+
+    # Mesi futuri (proiezione)
+    extra_by_month = {}
+    for sc in st.session_state.get('year_scenarios', []):
+        extra_by_month[sc['mese']] = extra_by_month.get(sc['mese'], 0) + sc['importo']
+
+    for m in range(today.month + 1, 13):
+        extra = extra_by_month.get(m, 0)
+        chart_rows.append({'mese': month_names_it[m], 'num': m,
+                           'entrate': avg_income,
+                           'spese': avg_needs + avg_wants + extra,
+                           'tipo': 'Proiezione' if extra == 0 else 'Proiezione + Extra'})
+
+    chart_df = pd.DataFrame(chart_rows)
+    chart_df['netto'] = chart_df['entrate'] - chart_df['spese']
+
+    fig = go.Figure()
+    colors = {'Storico': '#636EFA', 'Proiezione': '#00CC96', 'Proiezione + Extra': '#FFA15A'}
+    for tipo in chart_df['tipo'].unique():
+        sub = chart_df[chart_df['tipo'] == tipo]
+        fig.add_trace(go.Bar(x=sub['mese'], y=sub['netto'], name=tipo,
+                             marker_color=colors.get(tipo, '#AAAAAA')))
+
+    fig.add_trace(go.Scatter(x=chart_df['mese'], y=chart_df['netto'].cumsum(),
+                             mode='lines+markers', name='Cumulativo',
+                             line=dict(color='white', width=2, dash='dot'),
+                             yaxis='y2'))
+
+    fig.update_layout(
+        title="Netto Mensile (Storico + Proiezione)",
+        barmode='relative',
+        height=420,
+        yaxis=dict(title='Netto €'),
+        yaxis2=dict(title='Cumulativo €', overlaying='y', side='right', showgrid=False),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02),
+        hovermode='x unified'
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
 
 # ---------------------------------------------------------------------------
 # INCOME ANALYSIS
@@ -871,3 +1060,167 @@ def render_income_analysis(full_df, filtered_df):
         c1, c2 = st.columns(2)
         c1.plotly_chart(fig_pie, use_container_width=True)
         c2.plotly_chart(fig_stack, use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# YOY COMPARISON
+# ---------------------------------------------------------------------------
+
+def render_yoy_comparison(full_df):
+    from datetime import date as date_type
+    st.subheader("📅 Confronto Anno vs Anno")
+
+    today = date_type.today()
+    current_year = today.year
+    prev_year = current_year - 1
+
+    df = full_df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+
+    current_start = pd.Timestamp(current_year, 1, 1)
+    current_end = pd.Timestamp(today)
+    prev_start = pd.Timestamp(prev_year, 1, 1)
+    try:
+        prev_end = pd.Timestamp(prev_year, today.month, today.day)
+    except Exception:
+        prev_end = pd.Timestamp(prev_year, today.month, 28)
+
+    curr_df = df[(df['date'] >= current_start) & (df['date'] <= current_end)]
+    prev_df = df[(df['date'] >= prev_start) & (df['date'] <= prev_end)]
+
+    if curr_df.empty and prev_df.empty:
+        st.info("Dati insufficienti per il confronto anno su anno.")
+        return
+
+    st.info(
+        f"**{current_year}:** {current_start.strftime('%d/%m')} → {current_end.strftime('%d/%m/%Y')}  "
+        f"|  **{prev_year}:** {prev_start.strftime('%d/%m')} → {prev_end.strftime('%d/%m/%Y')}"
+    )
+
+    def period_metrics(period_df):
+        exp = period_df[period_df['type'] == 'Expense']['amount'].abs().sum()
+        inc = period_df[period_df['type'] == 'Income']['amount'].sum()
+        net = inc - exp
+        months = max(len(period_df['date'].dt.to_period('M').unique()), 1)
+        avg_exp = exp / months
+        return exp, inc, net, avg_exp
+
+    curr_exp, curr_inc, curr_net, curr_avg = period_metrics(curr_df)
+    prev_exp, prev_inc, prev_net, prev_avg = period_metrics(prev_df)
+
+    def delta_str(curr, prev, inverse=False):
+        if prev == 0:
+            return None
+        pct = ((curr - prev) / prev) * 100
+        return f"{pct:+.1f}% vs {prev_year}"
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(f"Spese {current_year}", f"€{curr_exp:,.0f}",
+                delta=delta_str(curr_exp, prev_exp), delta_color="inverse")
+    col2.metric(f"Entrate {current_year}", f"€{curr_inc:,.0f}",
+                delta=delta_str(curr_inc, prev_inc))
+    col3.metric(f"Risparmio Netto {current_year}", f"€{curr_net:,.0f}",
+                delta=delta_str(curr_net, prev_net))
+    col4.metric(f"Spesa Media/Mese {current_year}", f"€{curr_avg:,.0f}",
+                delta=delta_str(curr_avg, prev_avg), delta_color="inverse")
+
+    st.divider()
+
+    # Monthly bar chart
+    st.markdown("### 📊 Andamento Mensile")
+
+    month_names_it = {1:'Gen', 2:'Feb', 3:'Mar', 4:'Apr', 5:'Mag', 6:'Giu',
+                      7:'Lug', 8:'Ago', 9:'Set', 10:'Ott', 11:'Nov', 12:'Dic'}
+
+    def monthly_expenses_by_month(period_df, year_label):
+        exp = period_df[period_df['type'] == 'Expense'].copy()
+        if exp.empty:
+            return pd.DataFrame()
+        monthly = exp.groupby(exp['date'].dt.month)['amount'].sum().abs().reset_index()
+        monthly.columns = ['month_num', 'amount']
+        monthly['mese'] = monthly['month_num'].map(month_names_it)
+        monthly['anno'] = str(year_label)
+        return monthly
+
+    curr_monthly = monthly_expenses_by_month(curr_df, current_year)
+    prev_monthly = monthly_expenses_by_month(prev_df, prev_year)
+    combined_monthly = pd.concat([curr_monthly, prev_monthly])
+
+    if not combined_monthly.empty:
+        fig = px.bar(combined_monthly, x='mese', y='amount', color='anno', barmode='group',
+                     title=f"Spese Mensili: {current_year} vs {prev_year}",
+                     labels={'amount': '€', 'mese': 'Mese', 'anno': 'Anno'},
+                     color_discrete_map={str(current_year): '#636EFA', str(prev_year): '#EF553B'},
+                     category_orders={'mese': list(month_names_it.values())})
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # Category breakdown
+    st.markdown("### 📂 Spese per Categoria")
+
+    def cat_totals(period_df):
+        exp = period_df[period_df['type'] == 'Expense'].copy()
+        if exp.empty:
+            return pd.Series(dtype=float)
+        return exp.groupby('category')['amount'].sum().abs()
+
+    curr_cats = cat_totals(curr_df)
+    prev_cats = cat_totals(prev_df)
+    all_cats = sorted(set(list(curr_cats.index) + list(prev_cats.index)))
+
+    if all_cats:
+        cat_df = pd.DataFrame({
+            'Categoria': all_cats,
+            str(current_year): [curr_cats.get(c, 0) for c in all_cats],
+            str(prev_year): [prev_cats.get(c, 0) for c in all_cats],
+        })
+        cat_df['Δ€'] = cat_df[str(current_year)] - cat_df[str(prev_year)]
+        cat_df['Δ%'] = cat_df.apply(
+            lambda r: f"{((r[str(current_year)] - r[str(prev_year)]) / r[str(prev_year)] * 100):+.1f}%"
+            if r[str(prev_year)] > 0 else "N/A", axis=1
+        )
+        cat_df = cat_df.sort_values(str(current_year), ascending=False)
+
+        fig_cat = go.Figure()
+        fig_cat.add_trace(go.Bar(name=str(current_year), x=cat_df['Categoria'],
+                                  y=cat_df[str(current_year)], marker_color='#636EFA'))
+        fig_cat.add_trace(go.Bar(name=str(prev_year), x=cat_df['Categoria'],
+                                  y=cat_df[str(prev_year)], marker_color='#EF553B', opacity=0.75))
+        fig_cat.update_layout(barmode='group', height=400,
+                               title='Confronto Spese per Categoria',
+                               legend=dict(orientation='h', yanchor='bottom', y=1.02))
+        st.plotly_chart(fig_cat, use_container_width=True)
+
+        display = cat_df.copy()
+        display[str(current_year)] = display[str(current_year)].apply(lambda x: f"€{x:,.0f}")
+        display[str(prev_year)] = display[str(prev_year)].apply(lambda x: f"€{x:,.0f}")
+        display['Δ€'] = display['Δ€'].apply(lambda x: f"{'+'if x >= 0 else ''}€{x:,.0f}")
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+    # Need vs Want
+    if 'necessity' in df.columns:
+        st.divider()
+        st.markdown("### 🎯 Need vs Want")
+
+        def nw_totals(period_df, year_label):
+            exp = period_df[period_df['type'] == 'Expense'].copy()
+            if exp.empty:
+                return {}
+            return {
+                'Anno': str(year_label),
+                'Need': exp[exp['necessity'] == 'Need']['amount'].abs().sum(),
+                'Want': exp[exp['necessity'] == 'Want']['amount'].abs().sum(),
+            }
+
+        curr_nw = nw_totals(curr_df, current_year)
+        prev_nw = nw_totals(prev_df, prev_year)
+
+        if curr_nw and prev_nw:
+            nw_df = pd.DataFrame([curr_nw, prev_nw])
+            fig_nw = px.bar(nw_df, x='Anno', y=['Need', 'Want'], barmode='group',
+                            title='Need vs Want: Confronto Annuale',
+                            color_discrete_map={'Need': '#EF553B', 'Want': '#636EFA'})
+            fig_nw.update_layout(height=350)
+            st.plotly_chart(fig_nw, use_container_width=True)
