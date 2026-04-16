@@ -18,7 +18,7 @@ services:
     build: ./finance_api
     container_name: finance_api
     ports:
-      - "8502:8000"
+      - "8502:8502"
     volumes:
       - ./finance_data:/app/data:ro
     environment:
