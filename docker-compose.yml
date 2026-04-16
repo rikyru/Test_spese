@@ -7,11 +7,20 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      # Map the data folder on host to /app/data in container
       - ./finance_data:/app/data
-      # Persist EasyOCR models so they don't re-download on every rebuild
       - ./ocr_models:/root/.EasyOCR
     environment:
       - DB_PATH=/app/data/finance.duckdb
       - RULES_PATH=/app/data/rules.yaml
+    restart: unless-stopped
+
+  finance_api:
+    build: ./finance_api
+    container_name: finance_api
+    ports:
+      - "8502:8000"
+    volumes:
+      - ./finance_data:/app/data:ro
+    environment:
+      - DB_PATH=/app/data/finance.duckdb
     restart: unless-stopped
