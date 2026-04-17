@@ -25,16 +25,15 @@ def _refresh_snapshot() -> None:
             else float("inf")
         )
         if age > SNAPSHOT_MAX_AGE:
+            print(f"[snapshot] Copying {DB_PATH} -> {SNAPSHOT_PATH} ...", flush=True)
             shutil.copy2(DB_PATH, SNAPSHOT_PATH)
-            # Copia anche il WAL se presente
-            wal_src = DB_PATH + ".wal"
-            wal_dst = SNAPSHOT_PATH + ".wal"
-            if os.path.exists(wal_src):
-                shutil.copy2(wal_src, wal_dst)
-            elif os.path.exists(wal_dst):
-                os.remove(wal_dst)
-    except Exception:
-        pass  # Usa snapshot esistente se il refresh fallisce
+            print(f"[snapshot] Copy OK ({os.path.getsize(SNAPSHOT_PATH)} bytes)", flush=True)
+            # Rimuovi WAL dallo snapshot: vogliamo un DB pulito/standalone
+            snap_wal = SNAPSHOT_PATH + ".wal"
+            if os.path.exists(snap_wal):
+                os.remove(snap_wal)
+    except Exception as e:
+        print(f"[snapshot] FAILED: {type(e).__name__}: {e}", flush=True)
 
 app = FastAPI(
     title="Personal Finance API",
@@ -52,9 +51,14 @@ app.add_middleware(
 
 def get_con():
     _refresh_snapshot()
-    path = SNAPSHOT_PATH if os.path.exists(SNAPSHOT_PATH) else DB_PATH
+    if not os.path.exists(SNAPSHOT_PATH):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Snapshot non disponibile: impossibile leggere {DB_PATH}",
+        )
     try:
-        return duckdb.connect(path, read_only=True)
+        # Connessione read-write allo snapshot (è nostro, nessun altro lo usa)
+        return duckdb.connect(SNAPSHOT_PATH)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database non disponibile: {e}")
 
