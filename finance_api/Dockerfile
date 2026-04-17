@@ -5,7 +5,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     fastapi==0.111.0 \
     uvicorn==0.29.0 \
-    duckdb==1.2.2 \
+    duckdb==1.5.1 \
     pandas==2.2.2 \
     numpy==1.26.4
 

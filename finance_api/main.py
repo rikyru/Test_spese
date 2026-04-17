@@ -1,4 +1,6 @@
 import os
+import shutil
+import time
 import calendar
 from datetime import date, datetime
 from typing import Optional
@@ -10,6 +12,29 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 DB_PATH = os.getenv("DB_PATH", "/app/data/finance.duckdb")
+SNAPSHOT_PATH = "/tmp/finance_snapshot.duckdb"
+SNAPSHOT_MAX_AGE = 30  # secondi
+
+
+def _refresh_snapshot() -> None:
+    """Copia il DB in /tmp per evitare conflitti di lock con il dashboard."""
+    try:
+        age = (
+            time.time() - os.path.getmtime(SNAPSHOT_PATH)
+            if os.path.exists(SNAPSHOT_PATH)
+            else float("inf")
+        )
+        if age > SNAPSHOT_MAX_AGE:
+            shutil.copy2(DB_PATH, SNAPSHOT_PATH)
+            # Copia anche il WAL se presente
+            wal_src = DB_PATH + ".wal"
+            wal_dst = SNAPSHOT_PATH + ".wal"
+            if os.path.exists(wal_src):
+                shutil.copy2(wal_src, wal_dst)
+            elif os.path.exists(wal_dst):
+                os.remove(wal_dst)
+    except Exception:
+        pass  # Usa snapshot esistente se il refresh fallisce
 
 app = FastAPI(
     title="Personal Finance API",
@@ -26,8 +51,10 @@ app.add_middleware(
 
 
 def get_con():
+    _refresh_snapshot()
+    path = SNAPSHOT_PATH if os.path.exists(SNAPSHOT_PATH) else DB_PATH
     try:
-        return duckdb.connect(DB_PATH, read_only=True)
+        return duckdb.connect(path, read_only=True)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database non disponibile: {e}")
 
