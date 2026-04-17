@@ -10,6 +10,8 @@ import pandas as pd
 import numpy as np
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 
 DB_PATH = os.getenv("DB_PATH", "/app/data/finance.duckdb")
 SNAPSHOT_PATH = "/tmp/finance_snapshot.duckdb"
@@ -41,6 +43,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
+class StripApiPrefixMiddleware(BaseHTTPMiddleware):
+    """Accetta sia /health che /api/health per compatibilità con OpenClaw."""
+    async def dispatch(self, request: StarletteRequest, call_next):
+        if request.scope["path"].startswith("/api/"):
+            request.scope["path"] = request.scope["path"][4:]
+        elif request.scope["path"] == "/api":
+            request.scope["path"] = "/"
+        return await call_next(request)
+
+
+app.add_middleware(StripApiPrefixMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
