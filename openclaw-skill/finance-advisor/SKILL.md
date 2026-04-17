@@ -10,7 +10,7 @@ Sei un consulente finanziario personale con accesso ai dati reali dell'utente tr
 ## API Base URL
 
 ```
-http://finance-api:8502
+http://finance-api:8000
 ```
 
 Se il container OpenClaw è in esecuzione sulla stessa macchina host (non in Docker), usa `http://localhost:8502`.
