@@ -29,11 +29,14 @@ def _refresh_snapshot() -> None:
         if age > SNAPSHOT_MAX_AGE:
             print(f"[snapshot] Copying {DB_PATH} -> {SNAPSHOT_PATH} ...", flush=True)
             shutil.copy2(DB_PATH, SNAPSHOT_PATH)
+            # Copia anche il WAL: contiene le transazioni non ancora checkpointed
+            wal_src = DB_PATH + ".wal"
+            wal_dst = SNAPSHOT_PATH + ".wal"
+            if os.path.exists(wal_src):
+                shutil.copy2(wal_src, wal_dst)
+            elif os.path.exists(wal_dst):
+                os.remove(wal_dst)
             print(f"[snapshot] Copy OK ({os.path.getsize(SNAPSHOT_PATH)} bytes)", flush=True)
-            # Rimuovi WAL dallo snapshot: vogliamo un DB pulito/standalone
-            snap_wal = SNAPSHOT_PATH + ".wal"
-            if os.path.exists(snap_wal):
-                os.remove(snap_wal)
     except Exception as e:
         print(f"[snapshot] FAILED: {type(e).__name__}: {e}", flush=True)
 
