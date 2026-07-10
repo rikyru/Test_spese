@@ -1046,6 +1046,72 @@ def render_income_analysis(full_df, filtered_df):
 
     st.divider()
 
+    # --- Andamento Stipendio (voce singola) ---
+    st.markdown("### 💼 Andamento Stipendio")
+    st.caption("Analisi della sola voce 'Stipendio' per capire se sta salendo o scendendo.")
+
+    salary = full_income[full_income['category'] == 'Stipendio'].copy()
+    if salary.empty:
+        st.info("Nessuna voce 'Stipendio' trovata tra le entrate.")
+    else:
+        monthly_sal = salary.groupby(pd.Grouper(key='date', freq='ME'))['amount'].sum()
+        monthly_sal = monthly_sal[monthly_sal > 0]
+
+        last_sal = monthly_sal.iloc[-1]
+        avg_sal = monthly_sal.mean()
+
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Ultimo Stipendio Mensile", f"€{last_sal:,.0f}")
+        sc2.metric("Media Mensile", f"€{avg_sal:,.0f}")
+        if len(monthly_sal) >= 2:
+            prev_sal = monthly_sal.iloc[-2]
+            diff = last_sal - prev_sal
+            pct = (diff / prev_sal * 100) if prev_sal else 0
+            sc3.metric("Mese Precedente", f"€{prev_sal:,.0f}",
+                       delta=f"{diff:+,.0f}€ ({pct:+.1f}%)")
+        else:
+            sc3.metric("Mese Precedente", "N/A")
+
+        # Trend complessivo via regressione lineare
+        if len(monthly_sal) >= 3:
+            x = np.arange(len(monthly_sal))
+            slope = np.polyfit(x, monthly_sal.values, 1)[0]
+            if slope > 5:
+                st.success(f"📈 Lo stipendio è in **crescita** (~{slope:+,.0f} €/mese di trend)")
+            elif slope < -5:
+                st.error(f"📉 Lo stipendio è in **calo** (~{slope:+,.0f} €/mese di trend)")
+            else:
+                st.info(f"➡️ Lo stipendio è **stabile** (~{slope:+,.0f} €/mese di trend)")
+
+        # Grafico mensile con media mobile
+        sal_df = monthly_sal.reset_index()
+        sal_df.columns = ['date', 'amount']
+        fig_sal = go.Figure()
+        fig_sal.add_trace(go.Bar(x=sal_df['date'], y=sal_df['amount'],
+                                 name='Stipendio', marker_color='#00CC96', opacity=0.8))
+        if len(sal_df) >= 3:
+            sal_df['ma3'] = sal_df['amount'].rolling(3, min_periods=1).mean()
+            fig_sal.add_trace(go.Scatter(x=sal_df['date'], y=sal_df['ma3'],
+                                         name='Media mobile 3m', mode='lines+markers',
+                                         line=dict(color='#EF553B', width=2, dash='dot')))
+        fig_sal.update_layout(title="Stipendio Mensile nel Tempo", xaxis_title="Mese",
+                              yaxis_title="€", hovermode="x unified", height=380)
+        st.plotly_chart(fig_sal, use_container_width=True)
+
+        # Confronto stipendio annuale totale
+        annual_sal = salary.groupby(salary['date'].dt.year)['amount'].sum()
+        if len(annual_sal) >= 2:
+            asal_df = annual_sal.reset_index()
+            asal_df.columns = ['Anno', 'Stipendio']
+            asal_df['Anno'] = asal_df['Anno'].astype(str)
+            fig_asal = px.bar(asal_df, x='Anno', y='Stipendio', text_auto='.2s',
+                              title="Stipendio Annuale Totale",
+                              color_discrete_sequence=['#00CC96'])
+            fig_asal.update_layout(height=320)
+            st.plotly_chart(fig_asal, use_container_width=True)
+
+    st.divider()
+
     st.markdown("### 🏦 Income Sources")
     if not filtered_income.empty:
         filtered_income['date'] = pd.to_datetime(filtered_income['date'])
@@ -1100,19 +1166,22 @@ def render_yoy_comparison(full_df):
     def period_metrics(period_df):
         exp = period_df[period_df['type'] == 'Expense']['amount'].abs().sum()
         inc = period_df[period_df['type'] == 'Income']['amount'].sum()
+        sal = period_df[(period_df['type'] == 'Income') &
+                        (period_df['category'] == 'Stipendio')]['amount'].sum()
         net = inc - exp
         months = max(len(period_df['date'].dt.to_period('M').unique()), 1)
         avg_exp = exp / months
-        return exp, inc, net, avg_exp
+        return exp, inc, net, avg_exp, sal
 
-    curr_exp, curr_inc, curr_net, curr_avg = period_metrics(curr_df)
-    prev_exp, prev_inc, prev_net, prev_avg = period_metrics(prev_df)
+    curr_exp, curr_inc, curr_net, curr_avg, curr_sal = period_metrics(curr_df)
+    prev_exp, prev_inc, prev_net, prev_avg, prev_sal = period_metrics(prev_df)
 
-    def delta_str(curr, prev, inverse=False):
+    def delta_str(curr, prev):
+        # Mostra sia la variazione % sia quanto ammontava la voce l'anno precedente
         if prev == 0:
-            return None
+            return f"{prev_year}: €0"
         pct = ((curr - prev) / prev) * 100
-        return f"{pct:+.1f}% vs {prev_year}"
+        return f"{pct:+.1f}% · {prev_year}: €{prev:,.0f}"
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric(f"Spese {current_year}", f"€{curr_exp:,.0f}",
@@ -1123,6 +1192,10 @@ def render_yoy_comparison(full_df):
                 delta=delta_str(curr_net, prev_net))
     col4.metric(f"Spesa Media/Mese {current_year}", f"€{curr_avg:,.0f}",
                 delta=delta_str(curr_avg, prev_avg), delta_color="inverse")
+
+    col5, _c6, _c7, _c8 = st.columns(4)
+    col5.metric(f"Stipendio {current_year}", f"€{curr_sal:,.0f}",
+                delta=delta_str(curr_sal, prev_sal))
 
     st.divider()
 
@@ -1154,6 +1227,42 @@ def render_yoy_comparison(full_df):
                      category_orders={'mese': list(month_names_it.values())})
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # Stipendio mese per mese
+    st.markdown("### 💼 Stipendio: Mese per Mese")
+    st.markdown(
+        f"Stipendio totale — **{current_year}: €{curr_sal:,.0f}** vs "
+        f"**{prev_year}: €{prev_sal:,.0f}** "
+        f"({'+' if curr_sal >= prev_sal else ''}€{curr_sal - prev_sal:,.0f})"
+    )
+
+    def monthly_salary_by_month(period_df, year_label):
+        sal = period_df[(period_df['type'] == 'Income') &
+                        (period_df['category'] == 'Stipendio')].copy()
+        if sal.empty:
+            return pd.DataFrame()
+        monthly = sal.groupby(sal['date'].dt.month)['amount'].sum().reset_index()
+        monthly.columns = ['month_num', 'amount']
+        monthly['mese'] = monthly['month_num'].map(month_names_it)
+        monthly['anno'] = str(year_label)
+        return monthly
+
+    curr_sal_m = monthly_salary_by_month(curr_df, current_year)
+    prev_sal_m = monthly_salary_by_month(prev_df, prev_year)
+    combined_sal = pd.concat([curr_sal_m, prev_sal_m])
+
+    if not combined_sal.empty:
+        fig_sal = px.bar(combined_sal, x='mese', y='amount', color='anno', barmode='group',
+                         title=f"Stipendio Mensile: {current_year} vs {prev_year}",
+                         labels={'amount': '€', 'mese': 'Mese', 'anno': 'Anno'},
+                         color_discrete_map={str(current_year): '#00CC96', str(prev_year): '#EF553B'},
+                         category_orders={'mese': list(month_names_it.values())})
+        fig_sal.update_layout(height=380)
+        st.plotly_chart(fig_sal, use_container_width=True)
+    else:
+        st.caption("Nessun dato stipendio per il confronto.")
 
     st.divider()
 
