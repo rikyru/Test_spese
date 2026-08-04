@@ -84,25 +84,28 @@ def render_recurring(data_manager: DataManager):
     suggestions = data_manager.get_subscription_suggestions()
     if suggestions:
         st.subheader("💡 Possibili abbonamenti da aggiungere")
-        st.caption("Servizi ricorrenti rilevati nelle transazioni ma non ancora tra le ricorrenti. "
-                   "Scegli se aggiungerli o ignorare il suggerimento.")
+        st.caption("Servizi ancora attivi rilevati nelle transazioni ma non tra le ricorrenti. "
+                   "Frequenza e importo sono dedotti dai pagamenti recenti (gli abbonamenti "
+                   "senza pagamenti recenti vengono ignorati automaticamente).")
+        _freq_lbl = {'Monthly': 'mese', 'Yearly': 'anno', 'Weekly': 'sett.'}
         for s in suggestions:
             c1, c2, c3, c4 = st.columns([3, 3, 1, 1])
-            c1.markdown(f"**{s['tag'].title()}** — ~€{s['avg_monthly']:,.2f}/mese")
-            c2.caption(f"visto in {s['n_months']} mesi · categoria {s['category']} · ultimo {s['last']}")
+            c1.markdown(f"**{s['tag'].title()}** — €{s['amount']:,.2f}/{_freq_lbl.get(s['frequency'], 'mese')}")
+            c2.caption(f"{s['frequency']} · {s['n']} pagamenti · ultimo {s['last']} · cat. {s['category']}")
             if c3.button("➕ Aggiungi", key=f"sug_add_{s['tag']}", use_container_width=True):
                 from datetime import date
                 data_manager.add_recurring(
                     name=s['tag'].title(),
-                    amount=-abs(s['avg_monthly']),
+                    amount=-abs(s['amount']),
                     category=s['category'],
                     account=s['account'],
-                    frequency='Monthly',
+                    frequency=s['frequency'],
                     start_date=date.today(),
                     description=s['tag'].title(),
                     tags=[s['tag']],
                 )
-                st.success(f"'{s['tag'].title()}' aggiunto alle ricorrenti. Rifinisci importo/data qui sotto se serve.")
+                st.success(f"'{s['tag'].title()}' aggiunto ({s['frequency']}, €{s['amount']:,.2f}). "
+                           "Rifinisci data/importo qui sotto se serve.")
                 st.rerun()
             if c4.button("🙈 Ignora", key=f"sug_ign_{s['tag']}", use_container_width=True):
                 data_manager.ignore_subscription_suggestion(s['tag'])

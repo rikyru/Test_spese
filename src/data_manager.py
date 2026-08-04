@@ -119,14 +119,22 @@ class DataManager:
     def get_recurring(self):
         return self.con.execute("SELECT * FROM recurring_expenses ORDER BY next_date").df()
 
-    def get_subscription_suggestions(self, min_months=3):
+    def get_subscription_suggestions(self, min_payments=3):
         """
-        Suggerisce possibili abbonamenti da aggiungere alle ricorrenti: tag di
-        servizio (Spotify, DAZN, ...) presenti in almeno `min_months` mesi, non
-        già configurati come ricorrenti e non ignorati dall'utente.
-        Ritorna una lista di dict {tag, n_months, avg_monthly, category, account, last}.
+        Suggerisce possibili abbonamenti da aggiungere alle ricorrenti.
+
+        Per ogni tag di servizio (Spotify, Drive, ...) non ancora configurato né
+        ignorato, con almeno `min_payments` pagamenti:
+          - rileva la FREQUENZA dalla cadenza recente (ultimi 4 intervalli):
+            > 150gg = Yearly, < 12gg = Weekly, altrimenti Monthly;
+          - stima l'IMPORTO dall'ultimo pagamento (prezzo attuale);
+          - scarta gli abbonamenti INATTIVI, cioè senza pagamenti recenti rispetto
+            all'ultima data presente nei dati (non a "oggi", così l'assenza di
+            import recenti non falsa il calcolo).
+        Ritorna dict {tag, frequency, amount, n, last, category, account}.
         """
         from .utils import SUBSCRIPTION_TAGS
+        import statistics
         try:
             df = self.con.execute("""
                 SELECT lower(unnest(tags)) AS tag, date, amount, category
@@ -139,7 +147,13 @@ class DataManager:
         df = df[df['tag'].isin(SUBSCRIPTION_TAGS)]
         if df.empty:
             return []
-        df['month'] = pd.to_datetime(df['date']).dt.to_period('M')
+        df['date'] = pd.to_datetime(df['date'])
+
+        # Riferimento = ultima data presente nei dati (freshness), non oggi
+        try:
+            ref = pd.to_datetime(self.con.execute("SELECT max(date) FROM transactions").fetchone()[0])
+        except Exception:
+            ref = df['date'].max()
 
         rec = self.get_recurring()
         rec_names = ' '.join(rec['name'].astype(str).str.lower().tolist()) if not rec.empty else ''
@@ -153,21 +167,37 @@ class DataManager:
                 continue
             if tag and tag in rec_names:      # già configurato (match sottostringa)
                 continue
-            n_months = g['month'].nunique()
-            if n_months < min_months:
+            g = g.sort_values('date')
+            if len(g) < min_payments:
                 continue
-            avg_monthly = g.groupby('month')['amount'].sum().abs().mean()
+            dates = list(g['date'])
+            intervals = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
+            recent = intervals[-4:]
+            med = int(statistics.median(recent)) if recent else 30
+            days_since = (ref - dates[-1]).days
+
+            if med > 150:
+                freq = 'Yearly'
+            elif med < 12:
+                freq = 'Weekly'
+            else:
+                freq = 'Monthly'
+            period = {'Yearly': 365, 'Monthly': 30, 'Weekly': 7}[freq]
+            if days_since > period * 1.6 + 25:      # nessun pagamento recente = inattivo
+                continue
+
             cat_mode = g['category'].mode()
             category = cat_mode.iloc[0] if not cat_mode.empty else 'Intrattenimento'
             suggestions.append({
                 'tag': tag,
-                'n_months': int(n_months),
-                'avg_monthly': round(float(avg_monthly), 2),
+                'frequency': freq,
+                'amount': round(float(abs(g['amount'].iloc[-1])), 2),
+                'n': int(len(g)),
+                'last': str(dates[-1].date()),
                 'category': category,
                 'account': main_wallet,
-                'last': str(pd.to_datetime(g['date']).max().date()),
             })
-        return sorted(suggestions, key=lambda x: -x['n_months'])
+        return sorted(suggestions, key=lambda x: x['last'], reverse=True)
 
     def ignore_subscription_suggestion(self, tag):
         """Marca un tag come 'da non suggerire più' (persistito in rules.yaml)."""
