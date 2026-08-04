@@ -81,7 +81,7 @@ def render_analysis(data_manager: DataManager):
         else:
             st.error("Start date must be before end date.")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Smart Insights", "Income Analysis", "Tag Analysis", "Needs vs Wants", "Forecasting", "📅 Anno vs Anno", "📂 Categorie"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["Smart Insights", "Income Analysis", "Tag Analysis", "Needs vs Wants", "Forecasting", "📅 Anno vs Anno", "📂 Categorie", "💚 Salute"])
 
     with tab1:
         render_smart_insights(df, filtered_df, data_manager)
@@ -103,6 +103,9 @@ def render_analysis(data_manager: DataManager):
 
     with tab7:
         render_category_deepdive(df, filtered_df, data_manager)
+
+    with tab8:
+        render_financial_health(df, data_manager)
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +615,7 @@ def render_tag_analysis(df):
     tag_data = df_tags[df_tags['tags'] == selected_tag].copy()
     tag_data['date'] = pd.to_datetime(tag_data['date'])
 
-    expenses_only = tag_data[tag_data['type'] == 'Expense'].copy()
+    expenses_only = real_expenses(tag_data)
     expenses_only['abs_amount'] = expenses_only['amount'].abs()
 
     total_tag = expenses_only['abs_amount'].sum() if not expenses_only.empty else 0
@@ -705,6 +708,11 @@ def render_needs_vs_wants(full_df, filtered_df=None):
     col1.metric("Needs", f"€{needs_total:,.2f}", f"{needs_pct:.0f}% del totale")
     col2.metric("Wants", f"€{wants_total:,.2f}", f"{wants_pct:.0f}% del totale")
     col3.metric("Totale Spese", f"€{total_exp:,.2f}")
+
+    unclassified = total_exp - needs_total - wants_total
+    if unclassified > 0.5:
+        st.caption(f"⚠️ €{unclassified:,.2f} ({unclassified / total_exp * 100:.0f}%) senza classificazione Need/Want — "
+                   "impostabile in Settings → Necessity Rules.")
 
     # 50/30/20 Rule comparison
     st.markdown("### 🎯 Regola 50/30/20")
@@ -1648,3 +1656,187 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
         st.caption(f"⚠️ Minor aderenza: **{worst['Categoria']}** — solo {worst['Aderenza']} dei mesi entro budget.")
     else:
         st.info("Nessun dato di spesa per le categorie con budget.")
+
+
+# ---------------------------------------------------------------------------
+# SALUTE FINANZIARIA
+# ---------------------------------------------------------------------------
+
+def render_financial_health(full_df, data_manager):
+    st.subheader("💚 Salute Finanziaria")
+
+    df = full_df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+
+    exp = real_expenses(df)
+    inc = real_income(df)
+    if exp.empty:
+        st.info("Dati insufficienti.")
+        return
+    exp['abs_amount'] = exp['amount'].abs()
+    exp['my'] = exp['date'].dt.to_period('M')
+    inc['my'] = inc['date'].dt.to_period('M')
+
+    monthly_exp = exp.groupby('my')['abs_amount'].sum().sort_index()
+    monthly_inc = inc.groupby('my')['amount'].sum().sort_index()
+    net_worth = df['amount'].sum()          # patrimonio netto (include saldo iniziale)
+    avg_exp_12 = monthly_exp.tail(12).mean()
+
+    # ===== A. FONDO EMERGENZA =====
+    st.markdown("### 🛟 Fondo Emergenza")
+    runway = net_worth / avg_exp_12 if avg_exp_12 > 0 else 0
+
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Patrimonio Netto", f"€{net_worth:,.0f}")
+    a2.metric("Spesa Media/Mese (12m)", f"€{avg_exp_12:,.0f}")
+    a3.metric("Autonomia (Runway)", f"{runway:.1f} mesi")
+
+    gmax = max(12, runway * 1.2)
+    fig_g = go.Figure(go.Indicator(
+        mode="gauge+number", value=runway,
+        number={'suffix': ' mesi', 'font': {'size': 34}},
+        title={'text': "Mesi coperti senza entrate", 'font': {'size': 15}},
+        gauge={'axis': {'range': [0, gmax]}, 'bar': {'color': '#2196F3'},
+               'steps': [{'range': [0, 3], 'color': '#FFCDD2'},
+                         {'range': [3, 6], 'color': '#FFF9C4'},
+                         {'range': [6, gmax], 'color': '#C8E6C9'}],
+               'threshold': {'line': {'color': '#4CAF50', 'width': 4},
+                             'thickness': 0.8, 'value': 6}}))
+    fig_g.update_layout(height=280)
+    st.plotly_chart(fig_g, use_container_width=True)
+
+    if runway < 3:
+        st.error("⚠️ Sotto i 3 mesi: fondo emergenza da rinforzare.")
+    elif runway < 6:
+        st.warning("📊 Tra 3 e 6 mesi: discreto, l'ideale è 6+.")
+    else:
+        st.success("🎉 6+ mesi di autonomia: ottimo cuscinetto.")
+
+    st.divider()
+
+    # ===== B. PATRIMONIO + OBIETTIVO =====
+    st.markdown("### 📈 Patrimonio Netto & Obiettivo")
+    nw = df.sort_values('date').copy()
+    nw['cum'] = nw['amount'].cumsum()
+    nw_m = nw.groupby(nw['date'].dt.to_period('M'))['cum'].last().reset_index()
+    nw_m.columns = ['periodo', 'cum']
+    nw_m['mese'] = nw_m['periodo'].astype(str)
+    fig_nw = px.area(nw_m, x='mese', y='cum', title="Patrimonio Netto nel Tempo",
+                     labels={'cum': '€', 'mese': 'Mese'})
+    fig_nw.update_traces(line_color='#009688', fillcolor='rgba(0,150,136,0.25)')
+    fig_nw.update_layout(height=340, hovermode='x unified')
+    st.plotly_chart(fig_nw, use_container_width=True)
+
+    monthly_net = (monthly_inc - monthly_exp).dropna()
+    avg_save = monthly_net.tail(12).mean() if not monthly_net.empty else 0
+
+    g1, g2 = st.columns([1, 2])
+    goal = g1.number_input("🎯 Obiettivo patrimonio €", min_value=0,
+                           value=int(round(net_worth / 1000) * 1000) + 10000, step=1000)
+    if goal <= net_worth:
+        g2.info("🎉 Obiettivo già raggiunto!")
+    elif avg_save > 0:
+        months_to = (goal - net_worth) / avg_save
+        eta = (pd.Timestamp.today() + pd.DateOffset(months=int(round(months_to)))).strftime('%b %Y')
+        g2.success(f"Risparmiando ~€{avg_save:,.0f}/mese (media 12m), raggiungi "
+                   f"**€{goal:,.0f}** tra ~**{months_to:.0f} mesi** (≈ {eta}).")
+    else:
+        g2.warning("Col risparmio medio attuale (≤ 0) l'obiettivo non è raggiungibile: "
+                   "serve aumentare il risparmio mensile.")
+
+    st.divider()
+
+    # ===== C. MESI IN DEFICIT =====
+    st.markdown("### 🔴 Mesi in Deficit")
+    mdf = pd.DataFrame({'inc': monthly_inc, 'exp': monthly_exp}).fillna(0.0)
+    mdf['net'] = mdf['inc'] - mdf['exp']
+    mdf['mese'] = mdf.index.astype(str)
+    n_def = int((mdf['net'] < 0).sum())
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Mesi in Deficit", f"{n_def}/{len(mdf)}", f"{n_def / len(mdf) * 100:.0f}%",
+              delta_color="inverse")
+    worst = mdf.loc[mdf['net'].idxmin()]
+    c2.metric("Mese Peggiore", worst['mese'], f"€{worst['net']:,.0f}", delta_color="inverse")
+    streak = 0
+    for v in reversed(mdf['net'].tolist()):
+        if v >= 0:
+            streak += 1
+        else:
+            break
+    c3.metric("Streak Positivo (recente)", f"{streak} mesi")
+
+    colors = ['#EF5350' if v < 0 else '#66BB6A' for v in mdf['net']]
+    fig_d = go.Figure(go.Bar(x=mdf['mese'], y=mdf['net'], marker_color=colors))
+    fig_d.update_layout(height=320, title="Netto Mensile (entrate − spese reali)",
+                        yaxis_title='€', xaxis_title='Mese')
+    st.plotly_chart(fig_d, use_container_width=True)
+
+    st.divider()
+
+    # ===== D. FISSE vs VARIABILI + ABBONAMENTI =====
+    st.markdown("### 🔒 Spese Fisse vs Variabili")
+    st.caption("Stima: 'fissa' = tag ricorrente/abbonamento oppure categoria fissa (Fatture, Affitto, Alloggio).")
+
+    FIXED_TAGS = {'abbonamento', 'subscription', 'recurring'}
+    FIXED_CATS = {'fatture', 'affitto', 'alloggio'}
+
+    def _is_fixed(row):
+        t = row['tags']
+        if hasattr(t, 'tolist'):
+            t = t.tolist()
+        if isinstance(t, list) and any(str(x).lower() in FIXED_TAGS for x in t):
+            return True
+        return str(row['category']).lower() in FIXED_CATS
+
+    exp2 = exp.copy()
+    exp2['tipo'] = exp2.apply(lambda r: 'Fissa' if _is_fixed(r) else 'Variabile', axis=1)
+    fv = exp2.groupby(['my', 'tipo'])['abs_amount'].sum().reset_index()
+    fv['mese'] = fv['my'].astype(str)
+    fig_fv = px.area(fv, x='mese', y='abs_amount', color='tipo',
+                     title="Fisse vs Variabili nel Tempo",
+                     color_discrete_map={'Fissa': '#EF553B', 'Variabile': '#636EFA'},
+                     labels={'abs_amount': '€', 'mese': 'Mese', 'tipo': 'Tipo'})
+    fig_fv.update_layout(height=340, hovermode='x unified')
+    st.plotly_chart(fig_fv, use_container_width=True)
+
+    fixed_tot = exp2[exp2['tipo'] == 'Fissa']['abs_amount'].sum()
+    tot = exp2['abs_amount'].sum()
+    inc_tot = monthly_inc.sum()
+    d1, d2 = st.columns(2)
+    d1.metric("Quota Spese Fisse", f"{(fixed_tot / tot * 100) if tot else 0:.0f}%",
+              help="Sul totale delle spese")
+    if inc_tot > 0:
+        d2.metric("Fisse su Entrate", f"{fixed_tot / inc_tot * 100:.0f}%",
+                  help="Quanto del reddito è impegnato in spese fisse")
+
+    st.markdown("#### 📺 Abbonamenti nel Tempo")
+
+    def _has_sub(t):
+        if hasattr(t, 'tolist'):
+            t = t.tolist()
+        return isinstance(t, list) and any(str(x).lower() in ('abbonamento', 'subscription') for x in t)
+
+    subs = exp[exp['tags'].apply(_has_sub)]
+    if subs.empty:
+        st.caption("Nessuna spesa taggata 'abbonamento'. Tagga gli abbonamenti per tracciarli qui.")
+    else:
+        sm = subs.groupby('my')['abs_amount'].sum().sort_index()
+        sm_df = sm.reset_index()
+        sm_df['mese'] = sm_df['my'].astype(str)
+        fig_s = px.bar(sm_df, x='mese', y='abs_amount', title="Costo Abbonamenti/Mese",
+                       labels={'abs_amount': '€', 'mese': 'Mese'})
+        if len(sm) >= 3:
+            sm_df['ma3'] = sm_df['abs_amount'].rolling(3, min_periods=1).mean()
+            fig_s.add_scatter(x=sm_df['mese'], y=sm_df['ma3'], name='Media mobile 3m',
+                              line=dict(color='#EF553B', dash='dot'))
+        fig_s.update_layout(height=320, hovermode='x unified')
+        st.plotly_chart(fig_s, use_container_width=True)
+        if len(sm) >= 6:
+            creep = np.polyfit(np.arange(len(sm)), sm.values, 1)[0]
+            if creep > 1:
+                st.warning(f"📈 Gli abbonamenti crescono di ~€{creep:+.0f}/mese: attenzione al *subscription creep*.")
+            elif creep < -1:
+                st.success(f"📉 Abbonamenti in calo (~€{creep:+.0f}/mese).")
+            else:
+                st.info("➡️ Costo abbonamenti stabile.")

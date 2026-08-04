@@ -515,6 +515,43 @@ def render_settings(data_manager: DataManager):
 
     st.divider()
 
+    # --- Duplicate Detection ---
+    st.subheader("🧹 Rilevamento Duplicati")
+    st.caption("Transazioni con stessa data, importo e descrizione: spesso doppie importazioni. "
+               "Di default viene tenuta la prima di ogni gruppo e proposte in eliminazione le altre.")
+
+    dups = data_manager.get_potential_duplicates()
+    if dups.empty:
+        st.success("✅ Nessun potenziale duplicato trovato.")
+    else:
+        dups = dups.copy()
+        dups['_grp'] = dups.groupby(['date', 'amount', 'description']).ngroup()
+        n_groups = dups['_grp'].nunique()
+        # Proponi eliminazione di tutte tranne la prima di ogni gruppo
+        dups['Elimina'] = dups.groupby('_grp').cumcount() > 0
+        st.warning(f"Trovate **{len(dups)}** righe in **{n_groups}** gruppi "
+                   f"({(dups['Elimina']).sum()} proposte in eliminazione).")
+
+        show = dups[['Elimina', 'date', 'amount', 'description', 'category', 'account', 'source_file', 'id']]
+        edited = st.data_editor(
+            show, hide_index=True, use_container_width=True, key='dup_editor',
+            column_config={
+                'id': None,
+                'Elimina': st.column_config.CheckboxColumn("Elimina"),
+                'date': st.column_config.DateColumn("Data"),
+                'amount': st.column_config.NumberColumn("Importo", format="€%.2f"),
+            }
+        )
+        to_del = edited[edited['Elimina']]['id'].tolist()
+        st.caption(f"**{len(to_del)}** transazioni selezionate per l'eliminazione.")
+        if st.button(f"🗑️ Elimina {len(to_del)} selezionate", type="primary",
+                     disabled=(len(to_del) == 0), key='dup_del_btn'):
+            n = data_manager.delete_transactions(to_del)
+            st.success(f"Eliminate {n} transazioni duplicate.")
+            st.rerun()
+
+    st.divider()
+
     # --- Budget per Category ---
     st.subheader("🎯 Budget Mensile per Categoria")
     st.info("Imposta un budget mensile per categoria. Verrà mostrato come progress bar nella Dashboard.")

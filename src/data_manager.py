@@ -484,6 +484,43 @@ class DataManager:
         )
         return cnt
 
+    def get_potential_duplicates(self):
+        """
+        Ritorna le transazioni che appartengono a gruppi con stessa data, importo e
+        descrizione (probabili doppie importazioni). Colonne utili + id.
+        """
+        try:
+            return self.con.execute("""
+                WITH grp AS (
+                    SELECT date, amount, description, COUNT(*) AS n
+                    FROM transactions
+                    GROUP BY date, amount, description
+                    HAVING COUNT(*) > 1
+                )
+                SELECT t.id, t.date, t.amount, t.description, t.category,
+                       t.account, t.source_file
+                FROM transactions t
+                JOIN grp g
+                  ON t.date IS NOT DISTINCT FROM g.date
+                 AND t.amount IS NOT DISTINCT FROM g.amount
+                 AND t.description IS NOT DISTINCT FROM g.description
+                ORDER BY t.date DESC, t.amount, t.description
+            """).df()
+        except Exception:
+            return pd.DataFrame(columns=['id', 'date', 'amount', 'description',
+                                         'category', 'account', 'source_file'])
+
+    def delete_transactions(self, ids):
+        """Elimina le transazioni con gli id forniti. Ritorna il numero eliminato."""
+        ids = [i for i in (ids or []) if i]
+        if not ids:
+            return 0
+        placeholders = ','.join(['?'] * len(ids))
+        self.con.execute(
+            f"DELETE FROM transactions WHERE id IN ({placeholders})", ids
+        )
+        return len(ids)
+
     def get_transactions(self):
         return self.con.execute("SELECT * FROM transactions ORDER BY date DESC").df()
 
