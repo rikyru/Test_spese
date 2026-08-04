@@ -1745,10 +1745,10 @@ def render_financial_health(full_df, data_manager):
 
     # ===== D. FISSE vs VARIABILI + ABBONAMENTI =====
     st.markdown("### 🔒 Spese Fisse vs Variabili")
-    st.caption("Stima: 'fissa' = tag ricorrente/abbonamento, categoria fissa (Fatture, Affitto, Alloggio) "
-               "o casa fissa (mutuo, affitto, condominio nella descrizione).")
+    st.caption("Stima: 'fissa' = tag mutuo/condominio/affitto/abbonamento/ricorrente, "
+               "categoria fissa (Fatture, Affitto, Alloggio), o mutuo/affitto/condominio nella descrizione.")
 
-    FIXED_TAGS = {'abbonamento', 'subscription', 'recurring'}
+    FIXED_TAGS = {'abbonamento', 'subscription', 'recurring', 'mutuo', 'condominio', 'affitto'}
     FIXED_CATS = {'fatture', 'affitto', 'alloggio'}
     FIXED_DESC_KW = ('mutuo', 'affitto', 'condominio')
 
