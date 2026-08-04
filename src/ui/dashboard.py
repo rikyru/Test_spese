@@ -135,20 +135,21 @@ def render_dashboard(data_manager):
                 fig_cal.update_layout(height=70 + len(weeks) * 60,
                                       margin=dict(l=6, r=6, t=6, b=6))
                 with st.expander("📅 Calendario spese del mese", expanded=False):
-                    cal_event = st.plotly_chart(fig_cal, use_container_width=True,
-                                                on_select="rerun", key="cal_heat")
-                    if cal_event and cal_event.selection and cal_event.selection.points:
-                        p = cal_event.selection.points[0]
-                        try:
-                            xi = x_lbl.index(p['x']); yi = y_lbl.index(p['y'])
-                            day_num = weeks[yi][xi]
-                            if day_num > 0:
-                                day_tx = filtered_df[filtered_df['date'].dt.day == day_num]
-                                st.markdown(f"**Transazioni del {day_num} {month_names[selected_month]}**")
-                                st.dataframe(day_tx[['date', 'description', 'category', 'amount', 'tags']]
-                                             .sort_values('date'), hide_index=True, use_container_width=True)
-                        except Exception:
-                            pass
+                    st.plotly_chart(fig_cal, use_container_width=True, key="cal_heat")
+                    # Drill-down per giorno (selettore affidabile: il click sulla heatmap
+                    # non è supportato in modo affidabile da Streamlit)
+                    days_with = [int(d) for d in sorted(day_exp[day_exp > 0].index.tolist())]
+                    if days_with:
+                        day_opts = ["—"] + [f"{d} {month_names[selected_month]} · €{day_exp.get(d, 0):,.0f}"
+                                            for d in days_with]
+                        sel_day_lbl = st.selectbox("👉 Vedi le spese di un giorno", day_opts, key="cal_day_sel")
+                        if sel_day_lbl != "—":
+                            dnum = int(sel_day_lbl.split()[0])
+                            day_tx = filtered_df[filtered_df['date'].dt.day == dnum]
+                            st.markdown(f"**Transazioni del {dnum} {month_names[selected_month]}** — "
+                                        f"€{day_exp.get(dnum, 0):,.2f}")
+                            st.dataframe(day_tx[['date', 'description', 'category', 'amount', 'tags']]
+                                         .sort_values('date'), hide_index=True, use_container_width=True)
 
         # --- 0. Liquidity Overview (New) ---
         st.divider()
