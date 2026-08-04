@@ -42,6 +42,29 @@ def real_expenses(df):
     return df[(df['type'] == 'Expense') & (~_internal_mask(df))].copy()
 
 
+# Tag di servizi in abbonamento (streaming/digitali). Il tag generico 'abbonamento'
+# NON è affidabile: la regola lo assegna anche agli abbonamenti dei trasporti.
+SUBSCRIPTION_TAGS = {
+    'netflix', 'spotify', 'disney', 'disneyplus', 'disney+', 'dazn', 'nowtv', 'now tv',
+    'prime', 'amazon prime', 'primevideo', 'plex', 'youtube', 'yt premium', 'sky',
+    'infinity', 'apple music', 'applemusic', 'apple tv', 'appletv', 'icloud',
+    'google one', 'google storage', 'gdrive', 'drive', 'adobe', 'paramount',
+    'audible', 'xbox', 'game pass', 'playstation', 'psplus', 'crunchyroll', 'mubi',
+}
+
+
+def _tags_list(t):
+    """Normalizza la colonna tags (list/ndarray/None) in una lista Python."""
+    if hasattr(t, 'tolist'):
+        t = t.tolist()
+    return t if isinstance(t, list) else []
+
+
+def _is_subscription(tags):
+    """True se la transazione ha un tag di servizio in abbonamento."""
+    return any(str(x).lower() in SUBSCRIPTION_TAGS for x in _tags_list(tags))
+
+
 def render_analysis(data_manager: DataManager):
     st.header("Deep Analysis & Forecasting")
 
@@ -337,12 +360,9 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     # ====== 5. SUBSCRIPTION TRACKER ======
     st.markdown("### 🔄 Costo Abbonamenti")
 
-    # Check both tag 'abbonamento' AND recurring expenses table
-    sub_mask = filtered_df['tags'].apply(
-        lambda t: any(tag in ['abbonamento', 'subscription']
-                      for tag in (t if isinstance(t, list) else
-                                  t.tolist() if hasattr(t, 'tolist') else []))
-    )
+    # Abbonamenti reali: tag di servizio (non il generico 'abbonamento', che
+    # include gli abbonamenti dei trasporti) + tabella ricorrenti
+    sub_mask = filtered_df['tags'].apply(_is_subscription)
     subs = filtered_df[sub_mask & (filtered_df['type'] == 'Expense')].copy()
 
     # Also pull from recurring_expenses (if data_manager available)
@@ -1748,7 +1768,8 @@ def render_financial_health(full_df, data_manager):
     st.caption("Stima: 'fissa' = tag mutuo/condominio/affitto/abbonamento/ricorrente, "
                "categoria fissa (Fatture, Affitto, Alloggio), o mutuo/affitto/condominio nella descrizione.")
 
-    FIXED_TAGS = {'abbonamento', 'subscription', 'recurring', 'mutuo', 'condominio', 'affitto'}
+    FIXED_TAGS = {'abbonamento', 'subscription', 'recurring',
+                  'mutuo', 'condominio', 'affitto'} | SUBSCRIPTION_TAGS
     FIXED_CATS = {'fatture', 'affitto', 'alloggio'}
     FIXED_DESC_KW = ('mutuo', 'affitto', 'condominio')
 
@@ -1785,15 +1806,27 @@ def render_financial_health(full_df, data_manager):
                   help="Quanto del reddito è impegnato in spese fisse")
 
     st.markdown("#### 📺 Abbonamenti nel Tempo")
+    st.caption("Rilevati dai tag di servizio (spotify, nowtv, dazn, disney, prime, plex…), "
+               "non dal tag generico 'abbonamento' che include i trasporti.")
 
-    def _has_sub(t):
-        if hasattr(t, 'tolist'):
-            t = t.tolist()
-        return isinstance(t, list) and any(str(x).lower() in ('abbonamento', 'subscription') for x in t)
+    # Abbonamenti configurati nelle ricorrenti (fonte di verità dell'utente)
+    try:
+        rec = data_manager.get_recurring()
+    except Exception:
+        rec = pd.DataFrame()
+    if not rec.empty:
+        _svc = ['nowtv', 'now tv', 'disney', 'plex', 'netflix', 'spotify', 'dazn',
+                'prime', 'sky', 'youtube', 'icloud', 'adobe', 'mubi', 'paramount', 'infinity']
+        rn = rec['name'].astype(str).str.lower()
+        sub_rec = rec[rn.apply(lambda n: any(s in n for s in _svc))]
+        if not sub_rec.empty:
+            st.caption("🔁 Configurati nelle ricorrenti: " +
+                       " · ".join(f"{r['name']} €{abs(r['amount']):,.0f}/{str(r.get('frequency','Monthly'))[:3].lower()}"
+                                  for _, r in sub_rec.iterrows()))
 
-    subs = exp[exp['tags'].apply(_has_sub)]
+    subs = exp[exp['tags'].apply(_is_subscription)]
     if subs.empty:
-        st.caption("Nessuna spesa taggata 'abbonamento'. Tagga gli abbonamenti per tracciarli qui.")
+        st.caption("Nessuna spesa con tag di servizio in abbonamento.")
     else:
         sm = subs.groupby('my')['abs_amount'].sum().sort_index()
         sm_df = sm.reset_index()
