@@ -644,27 +644,52 @@ class DataManager:
         except:
             return []
 
-    def get_frequent_combos(self, limit=6):
+    def get_frequent_combos(self, limit=8, half_life_days=30):
         """
-        Combinazioni (categoria, tag) più frequenti nelle spese, con importo tipico
-        (mediana). Usate come scorciatoie di inserimento rapido, dato che la maggior
-        parte delle spese è identificata da categoria+tag più che dalla descrizione.
-        Ritorna DataFrame [category, tag, n, amt].
+        Combinazioni (categoria, tag) da usare come scorciatoie di inserimento rapido,
+        dato che la maggior parte delle spese è identificata da categoria+tag più che
+        dalla descrizione.
+
+        Il ranking è DINAMICO e pesato sulla recency: ogni transazione conta
+        0.5 ** (giorni_fa / half_life_days), quindi emergono le combinazioni usate
+        di recente (es. il supermercato o il locale dove vai in questo periodo).
+        L'importo tipico è la mediana degli ultimi utilizzi.
+        Ritorna DataFrame [category, tag, n, amt, last, score].
         """
         try:
-            return self.con.execute("""
-                SELECT category, tag, COUNT(*) AS n, median(abs(amount)) AS amt
-                FROM (
-                    SELECT category, unnest(tags) AS tag, amount
-                    FROM transactions WHERE type = 'Expense'
-                )
-                WHERE tag IS NOT NULL AND tag != '' AND category IS NOT NULL
-                GROUP BY category, tag
-                ORDER BY n DESC
-                LIMIT ?
-            """, [limit]).df()
+            df = self.con.execute("""
+                SELECT category, unnest(tags) AS tag, date, abs(amount) AS amt
+                FROM transactions
+                WHERE type = 'Expense'
+                  AND (source_file IS NULL OR source_file NOT IN ('Recurring', 'reconcile'))
+            """).df()
         except Exception:
-            return pd.DataFrame(columns=['category', 'tag', 'n', 'amt'])
+            return pd.DataFrame(columns=['category', 'tag', 'n', 'amt', 'last', 'score'])
+        if df.empty:
+            return pd.DataFrame(columns=['category', 'tag', 'n', 'amt', 'last', 'score'])
+
+        # Esclude i tag tecnici delle ricorrenti/aggiustamenti
+        _skip_tags = {'recurring', 'initial', 'adjustment'}
+        df = df[df['tag'].notna() & (df['tag'].astype(str) != '') & df['category'].notna()]
+        df = df[~df['tag'].astype(str).str.lower().isin(_skip_tags)]
+        if df.empty:
+            return pd.DataFrame(columns=['category', 'tag', 'n', 'amt', 'last', 'score'])
+
+        df['date'] = pd.to_datetime(df['date'])
+        ref = df['date'].max()
+        age = (ref - df['date']).dt.days.clip(lower=0)
+        df['w'] = 0.5 ** (age / float(half_life_days))
+
+        # importo tipico = mediana degli ultimi ~5 utilizzi della combinazione
+        def _recent_median(g):
+            return g.sort_values('date').tail(5)['amt'].median()
+
+        grp = df.groupby(['category', 'tag'])
+        agg = grp.agg(score=('w', 'sum'), n=('w', 'size'), last=('date', 'max')).reset_index()
+        med = grp.apply(_recent_median).reset_index(name='amt')
+        out = agg.merge(med, on=['category', 'tag'], how='left')
+        out = out.sort_values('score', ascending=False).head(limit).reset_index(drop=True)
+        return out[['category', 'tag', 'n', 'amt', 'last', 'score']]
 
     def suggest_budgets(self):
         """

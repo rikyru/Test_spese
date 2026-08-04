@@ -90,9 +90,9 @@ with st.sidebar.expander("➕ Aggiungi Transazione", expanded=True):
 
     # Scorciatoie rapide: categoria+tag più frequenti, con importo tipico precompilato
     tpl = st.session_state.get('qa_tpl')
-    combos = dm.get_frequent_combos(6)
+    combos = dm.get_frequent_combos(8)
     if not combos.empty:
-        st.caption("🔁 Rapidi — precompilano categoria, tag e importo tipico:")
+        st.caption("🔁 Rapidi (in base a cosa usi di recente) — precompilano categoria, tag e importo:")
         chip_cols = st.columns(2)
         for i, crow in combos.reset_index(drop=True).iterrows():
             _c = str(crow['category']); _t = str(crow['tag']); _a = float(crow['amt'] or 0)
