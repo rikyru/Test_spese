@@ -8,7 +8,7 @@ from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
 
 def render_dashboard(data_manager):
-    st.header("Dashboard v2.0")
+    st.header("Dashboard")
     
     # Load rules for icons
     re = RulesEngine()
@@ -341,20 +341,7 @@ def render_dashboard(data_manager):
             else:
                 st.info("No expense data for this period.")
 
-        # 2. Year over Year Comparison (Only if Year mode is selected or generally useful)
-        st.subheader("Year over Year Comparison (Monthly Expenses)")
-        
-        # Prepare data for all time to do YoY
-        expense_all = df[df['type'] == 'Expense'].copy()
-        expense_all['abs_amount'] = expense_all['amount'].abs()
-        
-        # Pivot: index=Month, columns=Year, values=Sum
-        yoy_data = expense_all.groupby(['month', 'year'])['abs_amount'].sum().unstack(fill_value=0)
-        
-        if not yoy_data.empty:
-            fig_yoy = px.line(yoy_data, x=yoy_data.index, y=yoy_data.columns, markers=True, 
-                              labels={'value': 'Amount (€)', 'month': 'Month', 'variable': 'Year'})
-            st.plotly_chart(fig_yoy, use_container_width=True)
+        # (Confronto Anno vs Anno spostato nella pagina 📊 Analysis → Anno vs Anno)
 
         # 3. Monthly Balance Trend (Combo Chart)
         st.subheader("Monthly Balance Trend")

@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from src.data_manager import DataManager
+from src.utils import SUBSCRIPTION_TAGS
 
 
 # ---------------------------------------------------------------------------
@@ -40,17 +41,6 @@ def real_expenses(df):
     if df.empty:
         return df.copy()
     return df[(df['type'] == 'Expense') & (~_internal_mask(df))].copy()
-
-
-# Tag di servizi in abbonamento (streaming/digitali). Il tag generico 'abbonamento'
-# NON è affidabile: la regola lo assegna anche agli abbonamenti dei trasporti.
-SUBSCRIPTION_TAGS = {
-    'netflix', 'spotify', 'disney', 'disneyplus', 'disney+', 'dazn', 'nowtv', 'now tv',
-    'prime', 'amazon prime', 'primevideo', 'plex', 'youtube', 'yt premium', 'sky',
-    'infinity', 'apple music', 'applemusic', 'apple tv', 'appletv', 'icloud',
-    'google one', 'google storage', 'gdrive', 'drive', 'adobe', 'paramount',
-    'audible', 'xbox', 'game pass', 'playstation', 'psplus', 'crunchyroll', 'mubi',
-}
 
 
 def _tags_list(t):

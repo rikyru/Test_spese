@@ -119,6 +119,66 @@ class DataManager:
     def get_recurring(self):
         return self.con.execute("SELECT * FROM recurring_expenses ORDER BY next_date").df()
 
+    def get_subscription_suggestions(self, min_months=3):
+        """
+        Suggerisce possibili abbonamenti da aggiungere alle ricorrenti: tag di
+        servizio (Spotify, DAZN, ...) presenti in almeno `min_months` mesi, non
+        già configurati come ricorrenti e non ignorati dall'utente.
+        Ritorna una lista di dict {tag, n_months, avg_monthly, category, account, last}.
+        """
+        from .utils import SUBSCRIPTION_TAGS
+        try:
+            df = self.con.execute("""
+                SELECT lower(unnest(tags)) AS tag, date, amount, category
+                FROM transactions WHERE type = 'Expense'
+            """).df()
+        except Exception:
+            return []
+        if df.empty:
+            return []
+        df = df[df['tag'].isin(SUBSCRIPTION_TAGS)]
+        if df.empty:
+            return []
+        df['month'] = pd.to_datetime(df['date']).dt.to_period('M')
+
+        rec = self.get_recurring()
+        rec_names = ' '.join(rec['name'].astype(str).str.lower().tolist()) if not rec.empty else ''
+        ignored = set(str(t).lower() for t in
+                      (self.rules_engine.rules.get('ignored_subscription_suggestions', []) or []))
+        main_wallet = self.get_main_wallet() or 'Contanti'
+
+        suggestions = []
+        for tag, g in df.groupby('tag'):
+            if tag in ignored:
+                continue
+            if tag and tag in rec_names:      # già configurato (match sottostringa)
+                continue
+            n_months = g['month'].nunique()
+            if n_months < min_months:
+                continue
+            avg_monthly = g.groupby('month')['amount'].sum().abs().mean()
+            cat_mode = g['category'].mode()
+            category = cat_mode.iloc[0] if not cat_mode.empty else 'Intrattenimento'
+            suggestions.append({
+                'tag': tag,
+                'n_months': int(n_months),
+                'avg_monthly': round(float(avg_monthly), 2),
+                'category': category,
+                'account': main_wallet,
+                'last': str(pd.to_datetime(g['date']).max().date()),
+            })
+        return sorted(suggestions, key=lambda x: -x['n_months'])
+
+    def ignore_subscription_suggestion(self, tag):
+        """Marca un tag come 'da non suggerire più' (persistito in rules.yaml)."""
+        rules = self.rules_engine.rules
+        lst = rules.get('ignored_subscription_suggestions', []) or []
+        if tag not in lst:
+            lst.append(tag)
+        rules['ignored_subscription_suggestions'] = lst
+        self.rules_engine.save_rules(rules)
+        return True
+
     def delete_recurring(self, rec_id):
         self.con.execute("DELETE FROM recurring_expenses WHERE id = ?", [rec_id])
 
