@@ -58,7 +58,7 @@ if global_search:
 elif 'global_search' not in st.session_state:
     st.session_state['global_search'] = ''
 
-page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "📊 Analysis", "Tag Manager", "Import", "Settings"])
+page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "Analysis", "Tag Manager", "Import", "Settings"])
 
 # If there's an active search, force Transactions page
 if global_search:
@@ -69,7 +69,7 @@ st.sidebar.divider()
 # ── Add Transaction (Quick Add) ──────────────────────────────────────────
 main_wallet = dm.get_main_wallet()
 
-with st.sidebar.expander("➕ Aggiungi Transazione", expanded=True):
+with st.sidebar.expander("➕ Aggiungi Transazione", expanded=False):
     # Fetch options
     cats = dm.get_unique_categories()
     accounts = dm.get_unique_accounts()
@@ -225,7 +225,7 @@ elif page == "Recurring Expenses":
     render_recurring(dm)
 elif page == "Shared Expenses":
     render_split(dm)
-elif page == "📊 Analysis":
+elif page == "Analysis":
     render_analysis(dm)
 elif page == "Tag Manager":
     render_tag_manager(dm)

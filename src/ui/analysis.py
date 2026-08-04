@@ -66,38 +66,41 @@ def render_analysis(data_manager: DataManager):
     df['year'] = df['date'].dt.year
     df['month'] = df['date'].dt.month
 
-    st.sidebar.subheader("Analysis Filters")
+    # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
     min_date = df['date'].min().date()
     max_date = df['date'].max().date()
+    today = pd.Timestamp.today()
+    month_names = {1:"Gen",2:"Feb",3:"Mar",4:"Apr",5:"Mag",6:"Giu",
+                   7:"Lug",8:"Ago",9:"Set",10:"Ott",11:"Nov",12:"Dic"}
 
-    filter_mode = st.sidebar.radio("Analysis Period", ["All Time", "Year", "Month", "Custom"], key='ana_filter')
+    mode_map = {"Tutto": "All Time", "Anno": "Year", "Mese": "Month", "Personalizzato": "Custom"}
+    af1, af2, af3 = st.columns([1.4, 1.3, 1.3])
+    mode_label = af1.selectbox("Periodo", list(mode_map.keys()), index=0, key='ana_mode')
+    filter_mode = mode_map[mode_label]
 
     filtered_df = df.copy()
+    years = sorted(df['year'].unique(), reverse=True)
 
     if filter_mode == "Year":
-        selected_year = st.sidebar.selectbox("Select Year", sorted(df['year'].unique(), reverse=True), key='ana_year')
+        selected_year = af2.selectbox("Anno", years, key='ana_year')
         filtered_df = df[df['year'] == selected_year]
-        st.info(f"Analyzing data for Year: {selected_year}")
-
     elif filter_mode == "Month":
-        selected_year = st.sidebar.selectbox("Select Year", sorted(df['year'].unique(), reverse=True), key='ana_year_m')
-        selected_month = st.sidebar.selectbox("Select Month", range(1, 13), key='ana_month')
+        selected_year = af2.selectbox("Anno", years, key='ana_year_m')
+        selected_month = af3.selectbox("Mese", list(range(1, 13)), index=int(today.month) - 1,
+                                       format_func=lambda m: month_names[m], key='ana_month')
         filtered_df = df[(df['year'] == selected_year) & (df['month'] == selected_month)]
-        st.info(f"Analyzing data for: {selected_month}/{selected_year}")
-
     elif filter_mode == "Custom":
-        start_date = st.sidebar.date_input("Start Date", min_date, key='ana_start')
-        end_date = st.sidebar.date_input("End Date", max_date, key='ana_end')
+        start_date = af2.date_input("Da", min_date, key='ana_start')
+        end_date = af3.date_input("A", max_date, key='ana_end')
         if start_date <= end_date:
             filtered_df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
-            st.info(f"Analyzing from {start_date} to {end_date}")
         else:
-            st.error("Start date must be before end date.")
+            st.error("La data iniziale deve precedere quella finale.")
 
     # Selettore vista: renderizza SOLO l'analisi scelta (molto più fluido delle st.tabs,
     # che invece calcolano tutte le schede a ogni interazione).
-    views = ["🧠 Smart Insights", "💰 Income", "🏷️ Tag", "⚖️ Needs vs Wants",
-             "📈 Forecasting", "📅 Anno vs Anno", "📂 Categorie", "💚 Salute"]
+    views = ["Smart Insights", "Income", "Tag", "Needs vs Wants",
+             "Forecasting", "Anno vs Anno", "Categorie", "Salute"]
     view = st.segmented_control("Vista analisi", views, default=views[0],
                                 key='ana_view', label_visibility="collapsed")
     view = view or views[0]
