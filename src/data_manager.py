@@ -499,29 +499,101 @@ class DataManager:
 
     def add_transaction(self, date, amount, ttype, category, account,
                         description='', tags=None, necessity=None,
-                        currency='EUR'):
+                        currency='EUR', apply_rules=True):
         """
         Insert a single manual transaction.
+
         `amount` must be positive; the correct sign is applied based on `ttype`
-        ('Expense' -> negative, otherwise positive). If `necessity` is None it is
-        derived from the category rules (defaulting to 'Want').
+        ('Expense' -> negative, otherwise positive).
+
+        When `apply_rules` is True the categorization/necessity/auto-tag rules run
+        to *enrich* the entry WITHOUT overriding explicit choices:
+          - category: kept if provided; otherwise filled by description rules /
+            learned history.
+          - tags: user tags are kept and merged with rule/keyword tags.
+          - necessity: if None ("Auto") it is derived from the final category and
+            tags via the necessity rules; an explicit 'Need'/'Want' is kept.
         """
         if tags is None:
             tags = []
+        tags = list(tags)
         amt = abs(float(amount))
         if ttype == 'Expense':
             amt = -amt
-        if necessity is None:
-            cat_nec_map = self.rules_engine.rules.get('category_necessity', {})
-            necessity = cat_nec_map.get(category, 'Want')
+
+        user_category = category if (category and category != 'Generale') else None
+        final_category = user_category
+        final_tags = list(tags)
+        final_necessity = necessity  # None => "Auto"
+
+        if apply_rules:
+            try:
+                row = pd.DataFrame([{
+                    'description': description or '',
+                    'original_description': description or '',
+                    'category': user_category,
+                    'tags': list(tags),
+                    'necessity': 'Want',
+                    'type': ttype,
+                    'amount': amt,
+                }])
+                enriched = self.rules_engine.apply_rules(row.copy())
+                enriched = self.rules_engine.auto_tag_from_description(enriched)
+                # History-based category suggestion for still-missing category
+                try:
+                    hist = self.con.execute(
+                        "SELECT description, category FROM transactions WHERE category IS NOT NULL"
+                    ).df()
+                    self.rules_engine.learn_from_history(hist)
+                    enriched = self.rules_engine.apply_history_rules(enriched)
+                except Exception:
+                    pass
+
+                e = enriched.iloc[0]
+                # Category: keep explicit user choice, else rule/history result
+                if not final_category:
+                    cat = e.get('category')
+                    final_category = cat if (isinstance(cat, str) and cat) else None
+                # Tags: merge user + rule/keyword tags, dedupe preserving order
+                rule_tags = e.get('tags')
+                if hasattr(rule_tags, 'tolist'):
+                    rule_tags = rule_tags.tolist()
+                if not isinstance(rule_tags, list):
+                    rule_tags = []
+                final_tags = list(dict.fromkeys(list(tags) + rule_tags))
+            except Exception:
+                pass
+
+        if not final_category:
+            final_category = 'Generale'
+
+        # Necessity: explicit wins; otherwise derive from rules (category + tags)
+        if final_necessity is None:
+            final_necessity = self._necessity_from_rules(final_category, final_tags)
+
         self.con.execute("""
             INSERT INTO transactions
                 (id, date, amount, currency, account, category, tags, description,
                  type, source_file, original_description, necessity)
             VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?, ?, 'manual_entry', ?, ?)
-        """, [date, amt, currency, account, category, tags, description, ttype,
-              description, necessity])
+        """, [date, amt, currency, account, final_category, final_tags, description,
+              ttype, description, final_necessity])
         return True
+
+    def _necessity_from_rules(self, category, tags):
+        """Derives Need/Want from category & tag necessity rules (defaults to Want)."""
+        rules = self.rules_engine.rules
+        cat_nec_map = {
+            r['name']: r['necessity']
+            for r in rules.get('categories', []) if r.get('necessity')
+        }
+        cat_nec_map.update(rules.get('category_necessity', {}))
+        necessity = cat_nec_map.get(category, 'Want')
+        tag_nec_map = rules.get('tag_necessity', {})
+        for t in (tags or []):
+            if t in tag_nec_map:
+                necessity = tag_nec_map[t]
+        return necessity
 
     def update_tag(self, old_tag, new_tag):
         """
