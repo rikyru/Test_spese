@@ -415,8 +415,49 @@ def render_settings(data_manager: DataManager):
 
     st.divider()
 
+    # --- Merge / Rename Category ---
+    st.subheader("🔀 Unisci / Rinomina Categoria")
+    st.caption(
+        "Sposta tutte le transazioni da una categoria a un'altra (la prima sparisce). "
+        "Con **'aggiorna regole'** anche le parole chiave e la necessità vengono ripuntate, "
+        "così i futuri import finiscono nella categoria giusta."
+    )
 
+    mc_cats = data_manager.get_unique_categories()
+    if mc_cats:
+        mcol1, mcol2 = st.columns(2)
+        mc_src = mcol1.selectbox("Da categoria (sparirà)", mc_cats, key='merge_src')
+        tgt_options = ["✏️ Nuova categoria..."] + [c for c in mc_cats if c != mc_src]
+        mc_tgt_sel = mcol2.selectbox("In categoria", tgt_options, key='merge_tgt')
+        if mc_tgt_sel == "✏️ Nuova categoria...":
+            mc_target = mcol2.text_input("Nome categoria destinazione", key='merge_tgt_new').strip()
+        else:
+            mc_target = mc_tgt_sel
 
+        mc_upd_rules = st.checkbox(
+            "Aggiorna anche le regole di categorizzazione (consigliato)",
+            value=True, key='merge_upd_rules'
+        )
+        try:
+            n_preview = data_manager.con.execute(
+                "SELECT count(*) FROM transactions WHERE category = ?", [mc_src]
+            ).fetchone()[0]
+        except Exception:
+            n_preview = 0
+        st.caption(f"'{mc_src}' contiene attualmente **{n_preview}** transazioni.")
+
+        if st.button("🔀 Unisci / Rinomina", type="primary", key='merge_btn'):
+            if mc_src and mc_target and mc_src != mc_target:
+                moved = data_manager.merge_category(mc_src, mc_target, update_rules=mc_upd_rules)
+                msg = f"Spostate {moved} transazioni da '{mc_src}' a '{mc_target}'."
+                if mc_upd_rules:
+                    msg += " Regole di categorizzazione aggiornate."
+                st.success(msg)
+                st.rerun()
+            else:
+                st.warning("Scegli una categoria di origine e una destinazione diverse.")
+    else:
+        st.info("Nessuna categoria disponibile.")
 
     st.divider()
 

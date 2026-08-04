@@ -595,6 +595,68 @@ class DataManager:
                 necessity = tag_nec_map[t]
         return necessity
 
+    def merge_category(self, source, target, update_rules=True):
+        """
+        Sposta tutte le transazioni (e ricorrenti) dalla categoria `source` alla
+        categoria `target`. La categoria `source` sparisce.
+
+        Se `update_rules` è True ripunta anche la configurazione (rules.yaml):
+          - la regola di categorizzazione per keyword viene rinominata su `target`
+            (o le sue keyword unite a quelle di una regola `target` esistente),
+            così i FUTURI import vanno nella categoria giusta;
+          - la mappa necessità e gli eventuali budget vengono spostati su `target`.
+
+        Ritorna il numero di transazioni spostate.
+        """
+        if not source or not target or source == target:
+            return 0
+
+        moved = self.con.execute(
+            "SELECT count(*) FROM transactions WHERE category = ?", [source]
+        ).fetchone()[0]
+        self.con.execute(
+            "UPDATE transactions SET category = ? WHERE category = ?", [target, source]
+        )
+        try:
+            self.con.execute(
+                "UPDATE recurring_expenses SET category = ? WHERE category = ?",
+                [target, source]
+            )
+        except Exception:
+            pass
+
+        if update_rules:
+            rules = self.rules_engine.rules or {}
+            cats = rules.get('categories', []) or []
+            src_rule = next((c for c in cats if c.get('name') == source), None)
+            tgt_rule = next((c for c in cats if c.get('name') == target), None)
+            if src_rule:
+                if tgt_rule:
+                    # Unisci le keyword nella regola destinazione (dedup, ordine preservato)
+                    merged = list(dict.fromkeys(
+                        (tgt_rule.get('match') or []) + (src_rule.get('match') or [])
+                    ))
+                    tgt_rule['match'] = merged
+                    cats.remove(src_rule)
+                else:
+                    # Nessuna regola destinazione: rinomina quella di origine
+                    src_rule['name'] = target
+                rules['categories'] = cats
+
+            cn = rules.get('category_necessity', {}) or {}
+            if source in cn:
+                cn.setdefault(target, cn.pop(source))
+                rules['category_necessity'] = cn
+
+            bud = rules.get('budgets', {}) or {}
+            if source in bud:
+                bud[target] = float(bud.get(target, 0) or 0) + float(bud.pop(source) or 0)
+                rules['budgets'] = bud
+
+            self.rules_engine.save_rules(rules)
+
+        return moved
+
     def update_tag(self, old_tag, new_tag):
         """
         Updates a tag across all transactions.
