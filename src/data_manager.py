@@ -468,6 +468,61 @@ class DataManager:
         except:
             return []
 
+    # --- Main Wallet (Portafoglio Principale) ---
+    def get_main_wallet(self):
+        """
+        Returns the configured main wallet. Falls back to the most-used account
+        if none is set (or the saved one no longer exists).
+        """
+        accounts = self.get_unique_accounts()
+        wallet = self.rules_engine.rules.get('main_wallet')
+        if wallet and wallet in accounts:
+            return wallet
+        # Fallback: most frequently used account
+        try:
+            res = self.con.execute(
+                "SELECT account FROM transactions WHERE account IS NOT NULL "
+                "GROUP BY account ORDER BY COUNT(*) DESC LIMIT 1"
+            ).fetchone()
+            if res and res[0]:
+                return res[0]
+        except Exception:
+            pass
+        return accounts[0] if accounts else None
+
+    def set_main_wallet(self, name):
+        """Persists the main wallet choice into rules.yaml."""
+        rules = self.rules_engine.rules
+        rules['main_wallet'] = name
+        self.rules_engine.save_rules(rules)
+        return True
+
+    def add_transaction(self, date, amount, ttype, category, account,
+                        description='', tags=None, necessity=None,
+                        currency='EUR'):
+        """
+        Insert a single manual transaction.
+        `amount` must be positive; the correct sign is applied based on `ttype`
+        ('Expense' -> negative, otherwise positive). If `necessity` is None it is
+        derived from the category rules (defaulting to 'Want').
+        """
+        if tags is None:
+            tags = []
+        amt = abs(float(amount))
+        if ttype == 'Expense':
+            amt = -amt
+        if necessity is None:
+            cat_nec_map = self.rules_engine.rules.get('category_necessity', {})
+            necessity = cat_nec_map.get(category, 'Want')
+        self.con.execute("""
+            INSERT INTO transactions
+                (id, date, amount, currency, account, category, tags, description,
+                 type, source_file, original_description, necessity)
+            VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?, ?, 'manual_entry', ?, ?)
+        """, [date, amt, currency, account, category, tags, description, ttype,
+              description, necessity])
+        return True
+
     def update_tag(self, old_tag, new_tag):
         """
         Updates a tag across all transactions.

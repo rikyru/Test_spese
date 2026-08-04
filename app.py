@@ -42,84 +42,102 @@ if global_search:
 
 st.sidebar.divider()
 
-# Quick Add Transaction
-with st.sidebar.expander("➕ Quick Add Transaction", expanded=False):
-    with st.form("quick_add_form"):
-        # Fetch options
-        cats = dm.get_unique_categories()
-        accounts = dm.get_unique_accounts()
-        existing_tags = dm.get_unique_tags()
-        # Also include tags from Rules
-        if hasattr(dm, 'rules_engine') and 'tags' in dm.rules_engine.rules:
-             rules_tags = [t['tag'] for t in dm.rules_engine.rules['tags']]
-             existing_tags = sorted(list(set(existing_tags + rules_tags)))
-        
-        qa_date = st.date_input("Date", datetime.today())
-        qa_amount = st.number_input("Amount", step=0.01)
-        qa_type = st.selectbox("Type", ["Expense", "Income"])
-        qa_desc = st.text_input("Description", placeholder="e.g. Dinner with friends")
-        
-        # Category: Select or Type
-        qa_cat_sel = st.selectbox("Category", ["Select..."] + cats + ["Create New..."])
-        qa_cat_new = ""
-        if qa_cat_sel == "Create New...":
-            qa_cat_new = st.text_input("New Category Name")
-        
-        qa_cat = qa_cat_new if qa_cat_sel == "Create New..." else (qa_cat_sel if qa_cat_sel != "Select..." else "General")
+# ── Add Transaction (Quick Add) ──────────────────────────────────────────
+main_wallet = dm.get_main_wallet()
 
-        # Account/Wallet
-        default_acc_idx = 0
-        if accounts:
-            qa_account_sel = st.selectbox("Wallet/Account", accounts + ["New Account..."])
+with st.sidebar.expander("➕ Aggiungi Transazione", expanded=True):
+    # Fetch options
+    cats = dm.get_unique_categories()
+    accounts = dm.get_unique_accounts()
+    existing_tags = dm.get_unique_tags()
+    if hasattr(dm, 'rules_engine') and 'tags' in dm.rules_engine.rules:
+        rules_tags = [t['tag'] for t in dm.rules_engine.rules['tags']]
+        existing_tags = sorted(list(set(existing_tags + rules_tags)))
+
+    # Main wallet first, so it is the default selection
+    if main_wallet and main_wallet in accounts:
+        wallet_opts = [main_wallet] + [a for a in accounts if a != main_wallet]
+    else:
+        wallet_opts = list(accounts)
+
+    def _wallet_label(w):
+        return f"⭐ {w}" if w == main_wallet else w
+
+    with st.form("quick_add_form", clear_on_submit=True):
+        qa_type_label = st.radio("Tipo", ["💸 Spesa", "💰 Entrata"], horizontal=True)
+        qa_type = "Expense" if "Spesa" in qa_type_label else "Income"
+
+        c_amt, c_date = st.columns(2)
+        qa_amount = c_amt.number_input("Importo €", min_value=0.0, step=0.01, format="%.2f")
+        qa_date = c_date.date_input("Data", datetime.today())
+
+        qa_desc = st.text_input("Descrizione", placeholder="es. Spesa Coop")
+
+        # Category: select or type a new one (both always visible → works inside a form)
+        qa_cat_sel = st.selectbox("Categoria", ["Seleziona..."] + cats)
+        qa_cat_new = st.text_input("… oppure nuova categoria", placeholder="lascia vuoto se scelta sopra")
+        if qa_cat_new.strip():
+            qa_cat = qa_cat_new.strip()
+        elif qa_cat_sel != "Seleziona...":
+            qa_cat = qa_cat_sel
         else:
-            qa_account_sel = st.text_input("Wallet/Account", value="Cash")
-            
-        qa_account = qa_account_sel
-        if qa_account_sel == "New Account...":
-            qa_account = st.text_input("New Account Name")
+            qa_cat = "Generale"
 
-        # Tags
-        qa_tags_sel = st.multiselect("Tags", existing_tags)
-        qa_new_tag = st.text_input("New Tag (Optional)", placeholder="#holiday")
-        
-        qa_nec = st.selectbox("Necessity", ["Want", "Need"])
-        
-        submitted = st.form_submit_button("Add Transaction")
+        # Wallet: default = portafoglio principale
+        if wallet_opts:
+            qa_wallet_sel = st.selectbox("Portafoglio", wallet_opts, index=0,
+                                         format_func=_wallet_label,
+                                         help="⭐ = portafoglio principale (impostabile in Settings).")
+        else:
+            qa_wallet_sel = None
+            st.caption("Nessun conto ancora: creane uno qui sotto.")
+        qa_wallet_new = st.text_input("… oppure nuovo conto",
+                                      placeholder="lascia vuoto per usare quello selezionato")
+        if qa_wallet_new.strip():
+            qa_wallet = qa_wallet_new.strip()
+        elif qa_wallet_sel:
+            qa_wallet = qa_wallet_sel
+        else:
+            qa_wallet = main_wallet or "Contanti"
+
+        with st.expander("Altro (tag, necessità)", expanded=False):
+            qa_tags_sel = st.multiselect("Tag", existing_tags)
+            qa_new_tag = st.text_input("Nuovo tag", placeholder="#vacanze")
+            qa_nec = st.selectbox("Necessità", ["Auto", "Need", "Want"],
+                                  help="Auto = deriva dalle regole della categoria")
+
+        submitted = st.form_submit_button("➕ Aggiungi", use_container_width=True, type="primary")
         if submitted:
-            if qa_amount > 0:
-                final_cat = qa_cat if qa_cat else "General"
-                final_acc = qa_account if qa_account else "Manual"
-                
+            if qa_amount and qa_amount > 0:
+                final_cat = qa_cat if qa_cat else "Generale"
+                final_wallet = qa_wallet if qa_wallet else (main_wallet or "Contanti")
+
                 final_tags = list(qa_tags_sel)
                 if qa_new_tag:
                     clean = qa_new_tag.strip().replace('#', '').lower()
                     if clean:
                         final_tags.append(clean)
-                
-                # Prepare DF
-                new_row = pd.DataFrame([{
-                    'date': pd.to_datetime(qa_date),
-                    'amount': -qa_amount if qa_type == 'Expense' else qa_amount,
-                    'currency': 'EUR',
-                    'account': final_acc,
-                    'category': final_cat,
-                    'tags': final_tags,
-                    'description': qa_desc,
-                    'type': qa_type,
-                    'source_file': 'manual_entry',
-                    'original_description': qa_desc,
-                    'necessity': qa_nec
-                }])
-                
-                # Insert
+
+                necessity = None if qa_nec == "Auto" else qa_nec
+
                 try:
-                    dm._process_and_insert(new_row, 'manual_entry')
-                    st.toast(f"Transaction Added! Tags: {final_tags}", icon="✅")
+                    dm.add_transaction(
+                        date=pd.to_datetime(qa_date).date(),
+                        amount=qa_amount,
+                        ttype=qa_type,
+                        category=final_cat,
+                        account=final_wallet,
+                        description=qa_desc,
+                        tags=final_tags,
+                        necessity=necessity,
+                    )
+                    kind = "Spesa" if qa_type == "Expense" else "Entrata"
+                    st.toast(f"{kind} aggiunta: €{qa_amount:,.2f} su {final_wallet}", icon="✅")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Errore: {e}")
             else:
-                st.warning("Amount must be > 0")
+                st.warning("L'importo deve essere > 0")
 
 st.sidebar.divider()
 

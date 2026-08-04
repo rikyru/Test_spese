@@ -13,6 +13,7 @@ def render_dashboard(data_manager):
     # Load rules for icons
     re = RulesEngine()
     wallet_rules = re.rules.get('wallets', {})
+    main_wallet = data_manager.get_main_wallet()
     
     try:
         df = data_manager.get_transactions()
@@ -100,7 +101,13 @@ def render_dashboard(data_manager):
             # --- Wallet Grid ---
             if not balances.empty:
                 st.write("##### Active Wallets")
-                
+
+                # Main wallet first, then by balance descending
+                balances['_is_main'] = balances['account'] == main_wallet
+                balances = balances.sort_values(
+                    ['_is_main', 'amount'], ascending=[False, False]
+                ).reset_index(drop=True)
+
                 # Helper for icons
                 def get_icon(name):
                     # Check custom rule first
@@ -125,9 +132,14 @@ def render_dashboard(data_manager):
                     # Determine color for amount
                     color = "#2E7D32" if bal >= 0 else "#C62828"
                     
+                    is_main = acc_name == main_wallet
+
                     with cols[i % 3]:
                         with st.container(border=True):
-                            st.markdown(f"**{icon} {acc_name}**")
+                            title = f"**{icon} {acc_name}**"
+                            if is_main:
+                                title += " &nbsp;<span style='background:#FFF3E0;color:#E65100;border-radius:4px;padding:1px 6px;font-size:0.7em;font-weight:700;'>⭐ PRINCIPALE</span>"
+                            st.markdown(title, unsafe_allow_html=True)
                             st.markdown(f"<h3 style='margin:0; color: {color};'>€ {bal:,.2f}</h3>", unsafe_allow_html=True)
 
         # --- Metrics ---

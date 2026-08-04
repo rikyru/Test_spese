@@ -341,14 +341,33 @@ def render_settings(data_manager: DataManager):
     
     # --- Wallet Management (Rename & Icon) ---
     st.subheader("👛 Manage Wallets (Rename & Icons)")
-    
+
     # Load rules for icons
     rules = rules_engine.rules
     if 'wallets' not in rules:
         rules['wallets'] = {}
-        
+
     # Get accounts
     accounts = data_manager.get_unique_accounts()
+
+    # --- Main Wallet (Portafoglio Principale) ---
+    if accounts:
+        current_main = data_manager.get_main_wallet()
+        mw_idx = accounts.index(current_main) if current_main in accounts else 0
+        col_mw1, col_mw2 = st.columns([3, 1])
+        sel_main = col_mw1.selectbox(
+            "⭐ Portafoglio Principale",
+            accounts,
+            index=mw_idx,
+            key='main_wallet_sel',
+            help="Usato come default quando aggiungi una transazione ed evidenziato nella Dashboard."
+        )
+        col_mw2.markdown("<div style='height:1.8em'></div>", unsafe_allow_html=True)
+        if col_mw2.button("💾 Salva", key='save_main_wallet'):
+            data_manager.set_main_wallet(sel_main)
+            st.success(f"Portafoglio principale impostato: ⭐ {sel_main}")
+            st.rerun()
+        st.divider()
     
     col_w1, col_w2, col_w3 = st.columns([2, 2, 1])
     
