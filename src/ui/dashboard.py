@@ -520,69 +520,13 @@ def render_dashboard(data_manager):
                         st.progress(pct, text=f"{pct*100:.0f}%")
             st.divider()
 
-        # 5. Clear Data Tables
-        st.subheader("📊 Detailed Breakdowns")
-        
-        col_breakdown_1, col_breakdown_2 = st.columns(2)
-        
+        # Top Transactions (le ripartizioni per categoria/tag sono gia' nei grafici a
+        # torta sopra, con drill-down, e nella tab Analysis -> Categorie)
         expense_df = filtered_df[filtered_df['type'] == 'Expense'].copy()
         if not expense_df.empty:
             expense_df['abs_amount'] = expense_df['amount'].abs()
-        
-        with col_breakdown_1:
-            st.write("### Expenses by Category")
-            if not expense_df.empty:
-                cat_summary = expense_df.groupby('category')['abs_amount'].sum().reset_index()
-                cat_summary = cat_summary.sort_values('abs_amount', ascending=False)
-                cat_summary['% Total'] = (cat_summary['abs_amount'] / cat_summary['abs_amount'].sum()) * 100
-                
-                # Format for display
-                cat_summary['Display Amount'] = cat_summary['abs_amount'].apply(lambda x: f"€{x:,.2f}")
-                cat_summary['% Total'] = cat_summary['% Total'].apply(lambda x: f"{x:.1f}%")
-                
-                st.dataframe(
-                    cat_summary[['category', 'Display Amount', '% Total']], 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={"category": "Category", "Display Amount": "Amount"}
-                )
-            else:
-                st.info("No expenses.")
 
-        with col_breakdown_2:
-            st.write("### Expenses by Tag")
-            if not expense_df.empty:
-                # Explode tags
-                tag_df = expense_df.explode('tags')
-                # Clean tags (remove None, nan, empty strings)
-                tag_df['tags'] = tag_df['tags'].astype(str)
-                tag_df = tag_df[~tag_df['tags'].isin(['nan', 'None', '', 'nan'])]
-                
-                if not tag_df.empty:
-                    tag_summary = tag_df.groupby('tags')['abs_amount'].sum().reset_index()
-                    tag_summary = tag_summary.sort_values('abs_amount', ascending=False)
-                    # Note: % Total for tags might exceed 100% of total expenses if multiple tags per transaction?
-                    # But usually we want % of total expenses involving this tag.
-                    # Or % of total spending? Let's do % of total spending derived from the original df sum.
-                    total_sepnding = expense_df['abs_amount'].sum()
-                    tag_summary['% Total'] = (tag_summary['abs_amount'] / total_sepnding) * 100
-                    
-                    # Format
-                    tag_summary['Display Amount'] = tag_summary['abs_amount'].apply(lambda x: f"€{x:,.2f}")
-                    tag_summary['% Total'] = tag_summary['% Total'].apply(lambda x: f"{x:.1f}%")
-                    
-                    st.dataframe(
-                        tag_summary[['tags', 'Display Amount', '% Total']], 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={"tags": "Tag", "Display Amount": "Amount"}
-                    )
-                else:
-                    st.info("No tagged expenses.")
-            else:
-                st.info("No expenses.")
-        
-        st.write("### Top Transactions")
+        st.subheader("🏆 Top Transactions")
         # Show top 10 largest expenses
         if not expense_df.empty:
             top_expenses = expense_df.sort_values('abs_amount', ascending=False).head(10)

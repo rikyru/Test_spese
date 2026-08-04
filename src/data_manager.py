@@ -644,6 +644,54 @@ class DataManager:
         except:
             return []
 
+    def get_frequent_combos(self, limit=6):
+        """
+        Combinazioni (categoria, tag) più frequenti nelle spese, con importo tipico
+        (mediana). Usate come scorciatoie di inserimento rapido, dato che la maggior
+        parte delle spese è identificata da categoria+tag più che dalla descrizione.
+        Ritorna DataFrame [category, tag, n, amt].
+        """
+        try:
+            return self.con.execute("""
+                SELECT category, tag, COUNT(*) AS n, median(abs(amount)) AS amt
+                FROM (
+                    SELECT category, unnest(tags) AS tag, amount
+                    FROM transactions WHERE type = 'Expense'
+                )
+                WHERE tag IS NOT NULL AND tag != '' AND category IS NOT NULL
+                GROUP BY category, tag
+                ORDER BY n DESC
+                LIMIT ?
+            """, [limit]).df()
+        except Exception:
+            return pd.DataFrame(columns=['category', 'tag', 'n', 'amt'])
+
+    def suggest_budgets(self):
+        """
+        Suggerisce un budget mensile per categoria = mediana della spesa mensile
+        (arrotondata a 10€), escludendo movimenti interni. Ritorna {categoria: importo}.
+        """
+        try:
+            df = self.con.execute("""
+                SELECT category, date_trunc('month', date) AS m, SUM(abs(amount)) AS tot
+                FROM transactions
+                WHERE type = 'Expense' AND category IS NOT NULL
+                GROUP BY category, m
+            """).df()
+        except Exception:
+            return {}
+        if df.empty:
+            return {}
+        skip = {'trasferimento', 'adjustment', 'initial balance', 'saldo iniziale'}
+        out = {}
+        for cat, g in df.groupby('category'):
+            if str(cat).lower() in skip:
+                continue
+            med = g['tot'].median()
+            if med and med > 0:
+                out[cat] = int(round(med / 10) * 10)
+        return out
+
     def get_unique_accounts(self):
         try:
             res = self.con.execute("SELECT DISTINCT account FROM transactions WHERE account IS NOT NULL ORDER BY 1").fetchall()

@@ -24,8 +24,32 @@ if 'data_manager' not in st.session_state:
 
 dm = st.session_state.data_manager
 
+# Genera automaticamente le ricorrenti dovute (una volta per sessione)
+if 'recurring_autogen' not in st.session_state:
+    try:
+        _gen = dm.process_recurring()
+        st.session_state['recurring_autogen_count'] = int(_gen or 0)
+    except Exception:
+        st.session_state['recurring_autogen_count'] = 0
+    st.session_state['recurring_autogen'] = True
+
 # Sidebar Navigation
 st.sidebar.title("💰 Finance App")
+
+if st.session_state.get('recurring_autogen_count'):
+    st.sidebar.success(f"🔁 Generate {st.session_state['recurring_autogen_count']} ricorrenti dovute.")
+    st.session_state['recurring_autogen_count'] = 0
+
+# Alert ricorrenti/bollette in arrivo (prossimi 7 giorni)
+try:
+    from datetime import date as _date, timedelta as _td
+    _upc = dm.get_projected_recurring(_date.today() + _td(days=7))
+    if _upc is not None and not _upc.empty:
+        _due = _upc[_upc['amount'] < 0]
+        if not _due.empty:
+            st.sidebar.warning(f"⏰ {len(_due)} spese ricorrenti in arrivo (7gg): €{_due['amount'].abs().sum():,.0f}")
+except Exception:
+    pass
 
 # Global Search — overrides page to Transactions
 global_search = st.sidebar.text_input("🔍 Search", placeholder="Cerca transazioni...")
@@ -54,27 +78,47 @@ with st.sidebar.expander("➕ Aggiungi Transazione", expanded=True):
         rules_tags = [t['tag'] for t in dm.rules_engine.rules['tags']]
         existing_tags = sorted(list(set(existing_tags + rules_tags)))
 
-    # Main wallet first, so it is the default selection
-    if main_wallet and main_wallet in accounts:
-        wallet_opts = [main_wallet] + [a for a in accounts if a != main_wallet]
+    # Ultimo wallet usato come default (fallback: principale)
+    default_wallet = st.session_state.get('last_wallet') or main_wallet
+    if default_wallet and default_wallet in accounts:
+        wallet_opts = [default_wallet] + [a for a in accounts if a != default_wallet]
     else:
         wallet_opts = list(accounts)
 
     def _wallet_label(w):
         return f"⭐ {w}" if w == main_wallet else w
 
+    # Scorciatoie rapide: categoria+tag più frequenti, con importo tipico precompilato
+    tpl = st.session_state.get('qa_tpl')
+    combos = dm.get_frequent_combos(6)
+    if not combos.empty:
+        st.caption("🔁 Rapidi — precompilano categoria, tag e importo tipico:")
+        chip_cols = st.columns(2)
+        for i, crow in combos.reset_index(drop=True).iterrows():
+            _c = str(crow['category']); _t = str(crow['tag']); _a = float(crow['amt'] or 0)
+            if chip_cols[i % 2].button(f"{_c[:10]} #{_t}", key=f"qa_chip_{i}", use_container_width=True):
+                st.session_state['qa_tpl'] = {'category': _c, 'tag': _t, 'amount': round(_a, 2)}
+                st.rerun()
+        if tpl:
+            st.caption(f"✍️ Precompilato: **{tpl['category']} #{tpl['tag']}** — controlla l'importo e aggiungi.")
+
+    cat_options = ["Seleziona..."] + cats
+    _cat_index = cat_options.index(tpl['category']) if (tpl and tpl['category'] in cat_options) else 0
+    _default_amt = float(tpl['amount']) if tpl else 0.0
+    _default_tags = [tpl['tag']] if (tpl and tpl['tag'] in existing_tags) else []
+
     with st.form("quick_add_form", clear_on_submit=True):
         qa_type_label = st.radio("Tipo", ["💸 Spesa", "💰 Entrata"], horizontal=True)
         qa_type = "Expense" if "Spesa" in qa_type_label else "Income"
 
         c_amt, c_date = st.columns(2)
-        qa_amount = c_amt.number_input("Importo €", min_value=0.0, step=0.01, format="%.2f")
+        qa_amount = c_amt.number_input("Importo €", min_value=0.0, step=0.01, format="%.2f", value=_default_amt)
         qa_date = c_date.date_input("Data", datetime.today())
 
-        qa_desc = st.text_input("Descrizione", placeholder="es. Spesa Coop")
+        qa_desc = st.text_input("Descrizione (opzionale)", placeholder="es. Spesa Coop")
 
         # Category: select or type a new one (both always visible → works inside a form)
-        qa_cat_sel = st.selectbox("Categoria", ["Seleziona..."] + cats)
+        qa_cat_sel = st.selectbox("Categoria", cat_options, index=_cat_index)
         qa_cat_new = st.text_input("… oppure nuova categoria", placeholder="lascia vuoto se scelta sopra")
         if qa_cat_new.strip():
             qa_cat = qa_cat_new.strip()
@@ -100,7 +144,7 @@ with st.sidebar.expander("➕ Aggiungi Transazione", expanded=True):
         else:
             qa_wallet = main_wallet or "Contanti"
 
-        qa_tags_sel = st.multiselect("Tag (opzionale)", existing_tags)
+        qa_tags_sel = st.multiselect("Tag (opzionale)", existing_tags, default=_default_tags)
         qa_new_tag = st.text_input("Nuovo tag (opzionale)", placeholder="#vacanze")
         qa_nec = st.selectbox("Necessità", ["Auto", "Need", "Want"],
                               help="Auto = completata dalle regole in base a categoria/descrizione.")
@@ -131,6 +175,8 @@ with st.sidebar.expander("➕ Aggiungi Transazione", expanded=True):
                         tags=final_tags,
                         necessity=necessity,
                     )
+                    st.session_state['last_wallet'] = final_wallet
+                    st.session_state.pop('qa_tpl', None)
                     kind = "Spesa" if qa_type == "Expense" else "Entrata"
                     st.toast(f"{kind} aggiunta: €{qa_amount:,.2f} su {final_wallet}", icon="✅")
                     st.rerun()

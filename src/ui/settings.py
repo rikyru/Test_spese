@@ -558,6 +558,20 @@ def render_settings(data_manager: DataManager):
     st.info("Imposta un budget mensile per categoria. Verrà mostrato come progress bar nella Dashboard.")
 
     budgets = current_rules.get('budgets', {})
+
+    if st.button("💡 Suggerisci budget (media storica)", key='suggest_budgets_btn'):
+        suggested = data_manager.suggest_budgets()
+        if suggested:
+            merged = dict(budgets)
+            for k, v in suggested.items():
+                merged.setdefault(k, v)   # non sovrascrive i budget già impostati a mano
+            current_rules['budgets'] = merged
+            rules_engine.save_rules(current_rules)
+            st.success(f"Applicati {len(suggested)} suggerimenti dalla media storica. Rivedi e salva.")
+            st.rerun()
+        else:
+            st.info("Dati insufficienti per suggerire budget.")
+
     db_cats = data_manager.get_unique_categories()
     rule_cats = [c['name'] for c in current_rules.get('categories', [])]
     all_cats = sorted(set(db_cats + rule_cats))
