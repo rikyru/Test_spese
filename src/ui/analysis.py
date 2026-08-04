@@ -81,30 +81,29 @@ def render_analysis(data_manager: DataManager):
         else:
             st.error("Start date must be before end date.")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["Smart Insights", "Income Analysis", "Tag Analysis", "Needs vs Wants", "Forecasting", "📅 Anno vs Anno", "📂 Categorie", "💚 Salute"])
+    # Selettore vista: renderizza SOLO l'analisi scelta (molto più fluido delle st.tabs,
+    # che invece calcolano tutte le schede a ogni interazione).
+    views = ["🧠 Smart Insights", "💰 Income", "🏷️ Tag", "⚖️ Needs vs Wants",
+             "📈 Forecasting", "📅 Anno vs Anno", "📂 Categorie", "💚 Salute"]
+    view = st.segmented_control("Vista analisi", views, default=views[0],
+                                key='ana_view', label_visibility="collapsed")
+    view = view or views[0]
 
-    with tab1:
+    if view == views[0]:
         render_smart_insights(df, filtered_df, data_manager)
-
-    with tab2:
+    elif view == views[1]:
         render_income_analysis(df, filtered_df)
-
-    with tab3:
+    elif view == views[2]:
         render_tag_analysis(filtered_df)
-
-    with tab4:
+    elif view == views[3]:
         render_needs_vs_wants(df, filtered_df)
-
-    with tab5:
+    elif view == views[4]:
         render_forecasting(filtered_df, df)
-
-    with tab6:
+    elif view == views[5]:
         render_yoy_comparison(df)
-
-    with tab7:
+    elif view == views[6]:
         render_category_deepdive(df, filtered_df, data_manager)
-
-    with tab8:
+    elif view == views[7]:
         render_financial_health(df, data_manager)
 
 
@@ -391,38 +390,8 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
 
     st.divider()
 
-    # ====== 6. ANNUAL PROJECTION ======
-    st.markdown("### 🔮 Proiezione \"Se continui così...\"")
-
-    if len(all_monthly_totals) >= 3:
-        avg_3m_expense = all_monthly_totals.iloc[-3:].mean()
-        projected_annual_expense = avg_3m_expense * 12
-
-        if total_income > 0:
-            all_income['month_year'] = all_income['date'].dt.to_period('M')
-            monthly_income = all_income.groupby('month_year')['amount'].sum().sort_index()
-            avg_3m_income = monthly_income.iloc[-3:].mean() if len(monthly_income) >= 3 else monthly_income.mean()
-            projected_annual_income = avg_3m_income * 12
-            projected_annual_savings = projected_annual_income - projected_annual_expense
-
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Spesa Media (3 mesi)", f"€{avg_3m_expense:,.0f}/mese")
-            col2.metric("Spesa Annuale Proiettata", f"€{projected_annual_expense:,.0f}")
-
-            if projected_annual_savings > 0:
-                col3.metric("Risparmio Annuale Stimato", f"€{projected_annual_savings:,.0f}",
-                            delta=f"+€{projected_annual_savings:,.0f}", delta_color="normal")
-                st.success(f"💪 A questo ritmo, a fine anno avrai risparmiato circa **€{projected_annual_savings:,.0f}**")
-            else:
-                col3.metric("Deficit Annuale Stimato", f"€{abs(projected_annual_savings):,.0f}",
-                            delta=f"-€{abs(projected_annual_savings):,.0f}", delta_color="inverse")
-                st.error(f"⚠️ A questo ritmo, a fine anno sarai in negativo di **€{abs(projected_annual_savings):,.0f}**")
-        else:
-            st.metric("Spesa Annuale Proiettata", f"€{projected_annual_expense:,.0f}")
-    else:
-        st.info("Servono almeno 3 mesi di dati per la proiezione.")
-
-    st.divider()
+    # (Proiezione annuale rimossa: ora nella tab Forecasting → Scenario Fine Anno,
+    #  più completa e interattiva.)
 
     # ====== 7. WEEKDAY HEATMAP ======
     st.markdown("### 📅 Quando Spendi di Più?")
@@ -1776,10 +1745,12 @@ def render_financial_health(full_df, data_manager):
 
     # ===== D. FISSE vs VARIABILI + ABBONAMENTI =====
     st.markdown("### 🔒 Spese Fisse vs Variabili")
-    st.caption("Stima: 'fissa' = tag ricorrente/abbonamento oppure categoria fissa (Fatture, Affitto, Alloggio).")
+    st.caption("Stima: 'fissa' = tag ricorrente/abbonamento, categoria fissa (Fatture, Affitto, Alloggio) "
+               "o casa fissa (mutuo, affitto, condominio nella descrizione).")
 
     FIXED_TAGS = {'abbonamento', 'subscription', 'recurring'}
     FIXED_CATS = {'fatture', 'affitto', 'alloggio'}
+    FIXED_DESC_KW = ('mutuo', 'affitto', 'condominio')
 
     def _is_fixed(row):
         t = row['tags']
@@ -1787,7 +1758,10 @@ def render_financial_health(full_df, data_manager):
             t = t.tolist()
         if isinstance(t, list) and any(str(x).lower() in FIXED_TAGS for x in t):
             return True
-        return str(row['category']).lower() in FIXED_CATS
+        if str(row['category']).lower() in FIXED_CATS:
+            return True
+        desc = str(row['description']).lower()
+        return any(kw in desc for kw in FIXED_DESC_KW)
 
     exp2 = exp.copy()
     exp2['tipo'] = exp2.apply(lambda r: 'Fissa' if _is_fixed(r) else 'Variabile', axis=1)

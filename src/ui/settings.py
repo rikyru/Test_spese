@@ -532,7 +532,7 @@ def render_settings(data_manager: DataManager):
         st.warning(f"Trovate **{len(dups)}** righe in **{n_groups}** gruppi "
                    f"({(dups['Elimina']).sum()} proposte in eliminazione).")
 
-        show = dups[['Elimina', 'date', 'amount', 'description', 'category', 'account', 'source_file', 'id']]
+        show = dups[['Elimina', 'date', 'amount', 'description', 'category', 'tags', 'account', 'source_file', 'id']]
         edited = st.data_editor(
             show, hide_index=True, use_container_width=True, key='dup_editor',
             column_config={
@@ -540,6 +540,7 @@ def render_settings(data_manager: DataManager):
                 'Elimina': st.column_config.CheckboxColumn("Elimina"),
                 'date': st.column_config.DateColumn("Data"),
                 'amount': st.column_config.NumberColumn("Importo", format="€%.2f"),
+                'tags': st.column_config.TextColumn("Tag"),
             }
         )
         to_del = edited[edited['Elimina']]['id'].tolist()

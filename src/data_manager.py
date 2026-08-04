@@ -498,7 +498,7 @@ class DataManager:
                     HAVING COUNT(*) > 1
                 )
                 SELECT t.id, t.date, t.amount, t.description, t.category,
-                       t.account, t.source_file
+                       t.account, array_to_string(t.tags, ', ') AS tags, t.source_file
                 FROM transactions t
                 JOIN grp g
                   ON t.date IS NOT DISTINCT FROM g.date
@@ -508,7 +508,7 @@ class DataManager:
             """).df()
         except Exception:
             return pd.DataFrame(columns=['id', 'date', 'amount', 'description',
-                                         'category', 'account', 'source_file'])
+                                         'category', 'account', 'tags', 'source_file'])
 
     def delete_transactions(self, ids):
         """Elimina le transazioni con gli id forniti. Ritorna il numero eliminato."""
