@@ -461,6 +461,60 @@ def render_settings(data_manager: DataManager):
 
     st.divider()
 
+    # --- Fix Miscategorized (per tag) ---
+    st.subheader("🔧 Correggi Categorizzazioni")
+    st.caption("Trova e correggi spese finite nella categoria sbagliata, lavorando per tag "
+               "(es. una spesa con tag 'piscina' finita in 'Trasporti').")
+
+    try:
+        inc = data_manager.get_tag_category_inconsistencies()
+    except Exception:
+        inc = pd.DataFrame()
+
+    # Discovery: tag presenti in più categorie = probabili errori
+    if not inc.empty:
+        spread = inc.groupby('tag')['category'].nunique().reset_index(name='n_cat')
+        multi = spread[spread['n_cat'] >= 2].sort_values('n_cat', ascending=False)
+        if not multi.empty:
+            with st.expander(f"🔎 Tag sparsi su più categorie ({len(multi)}) — possibili errori", expanded=False):
+                for _, row in multi.head(40).iterrows():
+                    tg = row['tag']
+                    sub = inc[inc['tag'] == tg].sort_values('n', ascending=False)
+                    cats_str = " · ".join(f"{r['category']} ({int(r['n'])})" for _, r in sub.iterrows())
+                    st.markdown(f"**#{tg}** → {cats_str}")
+
+    fix_tags = data_manager.get_unique_tags()
+    fix_cats = data_manager.get_unique_categories()
+    if fix_tags and fix_cats:
+        fcol1, fcol2 = st.columns(2)
+        fix_tag = fcol1.selectbox("Tag da correggere", fix_tags, key='fix_tag')
+
+        # Distribuzione attuale del tag selezionato
+        only_opts = ["(tutte)"]
+        if not inc.empty:
+            cur = inc[inc['tag'] == fix_tag].sort_values('n', ascending=False)
+            if not cur.empty:
+                st.caption("Attualmente in: " + " · ".join(
+                    f"{r['category']} ({int(r['n'])})" for _, r in cur.iterrows()))
+                only_opts += cur['category'].tolist()
+
+        fix_target = fcol2.selectbox("Assegna categoria", fix_cats, key='fix_target')
+        only_from = st.selectbox("Solo se attualmente in… (opzionale)", only_opts, key='fix_only')
+        ofc = None if only_from == "(tutte)" else only_from
+
+        if st.button("🔧 Correggi ora", type="primary", key='fix_btn'):
+            if fix_tag and fix_target:
+                n = data_manager.reassign_category_by_tag(fix_tag, fix_target, only_from_category=ofc)
+                if n > 0:
+                    st.success(f"Corrette {n} transazioni con tag '{fix_tag}' → categoria '{fix_target}'.")
+                    st.rerun()
+                else:
+                    st.info("Nessuna transazione corrispondente ai criteri.")
+    else:
+        st.info("Servono transazioni con tag e categorie per usare questo strumento.")
+
+    st.divider()
+
     # --- Budget per Category ---
     st.subheader("🎯 Budget Mensile per Categoria")
     st.info("Imposta un budget mensile per categoria. Verrà mostrato come progress bar nella Dashboard.")

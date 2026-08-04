@@ -429,6 +429,61 @@ class DataManager:
         
         self.con.execute("INSERT INTO transactions (date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity, id) SELECT date, amount, currency, account, category, tags, description, type, source_file, original_description, necessity, uuid() FROM df")
 
+    def get_tag_category_inconsistencies(self):
+        """
+        Per ogni tag (sulle spese) elenca le categorie in cui compare, con conteggio
+        e totale. Utile a scovare spese categorizzate male (es. tag 'piscina' che
+        compare sotto 'Trasporti').
+        Ritorna un DataFrame [tag, category, n, tot].
+        """
+        try:
+            return self.con.execute("""
+                SELECT tag, category, COUNT(*) AS n, SUM(ABS(amount)) AS tot
+                FROM (
+                    SELECT unnest(tags) AS tag, category, amount
+                    FROM transactions
+                    WHERE type = 'Expense'
+                ) t
+                WHERE tag IS NOT NULL AND tag != ''
+                GROUP BY tag, category
+            """).df()
+        except Exception:
+            return pd.DataFrame(columns=['tag', 'category', 'n', 'tot'])
+
+    def reassign_category_by_tag(self, tag, target_category, only_from_category=None):
+        """
+        Assegna `target_category` a tutte le transazioni che contengono `tag`
+        (opzionalmente solo quelle attualmente in `only_from_category`).
+        Aggiorna anche la necessità in base alla nuova categoria.
+        Ritorna il numero di transazioni corrette.
+        """
+        if not tag or not target_category:
+            return 0
+
+        where = "list_contains(tags, ?)"
+        where_params = [tag]
+        if only_from_category:
+            where += " AND category = ?"
+            where_params.append(only_from_category)
+
+        cnt = self.con.execute(
+            f"SELECT count(*) FROM transactions WHERE {where}", where_params
+        ).fetchone()[0]
+        if cnt == 0:
+            return 0
+
+        self.con.execute(
+            f"UPDATE transactions SET category = ? WHERE {where}",
+            [target_category] + where_params
+        )
+        # Allinea la necessità alla nuova categoria (+ eventuale regola sul tag)
+        nec = self._necessity_from_rules(target_category, [tag])
+        self.con.execute(
+            f"UPDATE transactions SET necessity = ? WHERE {where}",
+            [nec] + where_params
+        )
+        return cnt
+
     def get_transactions(self):
         return self.con.execute("SELECT * FROM transactions ORDER BY date DESC").df()
 
