@@ -100,11 +100,12 @@ with st.sidebar.expander("➕ Aggiungi Transazione", expanded=True):
         else:
             qa_wallet = main_wallet or "Contanti"
 
-        with st.expander("Altro (tag, necessità)", expanded=False):
-            qa_tags_sel = st.multiselect("Tag", existing_tags)
-            qa_new_tag = st.text_input("Nuovo tag", placeholder="#vacanze")
+        with st.expander("Tag e Necessità (opzionali)", expanded=False):
+            st.caption("Tutto qui dentro è facoltativo: puoi salvare senza compilare nulla.")
+            qa_tags_sel = st.multiselect("Tag (opzionale)", existing_tags)
+            qa_new_tag = st.text_input("Nuovo tag (opzionale)", placeholder="#vacanze")
             qa_nec = st.selectbox("Necessità", ["Auto", "Need", "Want"],
-                                  help="Auto = deriva dalle regole della categoria")
+                                  help="Auto = deriva dalla categoria. Come i tag, è facoltativa.")
 
         submitted = st.form_submit_button("➕ Aggiungi", use_container_width=True, type="primary")
         if submitted:
