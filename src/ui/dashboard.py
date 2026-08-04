@@ -323,21 +323,73 @@ def render_dashboard(data_manager):
                 st.info("No income data for this period.")
 
         with col_charts_2:
-            st.subheader("Expense Categories")
+            st.subheader("Spese per Categoria")
             expense_df = filtered_df[filtered_df['type'] == 'Expense']
             if not expense_df.empty:
                 expense_df = expense_df.copy()
                 expense_df['abs_amount'] = expense_df['amount'].abs()
+                exp_total = expense_df['abs_amount'].sum()
                 exp_by_cat = expense_df.groupby('category')['abs_amount'].sum().reset_index().sort_values('abs_amount', ascending=False)
                 fig_exp = px.pie(exp_by_cat, values='abs_amount', names='category', hole=0.4)
                 exp_event = st.plotly_chart(fig_exp, use_container_width=True, on_select="rerun", key="pie_expense")
-                # Drill-down
+                st.caption("👆 Clicca una categoria (torta o tabella) per il dettaglio per tag.")
+
+                # Tabella categorie (importo + %) — sempre visibile
+                cat_show = exp_by_cat.copy()
+                cat_show['%'] = (cat_show['abs_amount'] / exp_total * 100).apply(lambda x: f"{x:.1f}%")
+                cat_show['Importo'] = exp_by_cat['abs_amount'].apply(lambda x: f"€{x:,.2f}")
+                cat_sel_event = st.dataframe(
+                    cat_show[['category', 'Importo', '%']],
+                    use_container_width=True, hide_index=True,
+                    on_select="rerun", selection_mode="single-row", key="cat_table",
+                    column_config={"category": "Categoria"}
+                )
+
+                # Categoria selezionata: dalla torta o dalla riga della tabella
+                sel_cat = None
                 if exp_event and exp_event.selection and exp_event.selection.points:
                     sel_cat = exp_event.selection.points[0].get('label')
-                    if sel_cat:
-                        st.markdown(f"**Transactions — {sel_cat}**")
-                        drill = expense_df[expense_df['category'] == sel_cat][['date','description','amount','tags']].sort_values('date', ascending=False)
-                        st.dataframe(drill, use_container_width=True, hide_index=True)
+                elif cat_sel_event and cat_sel_event.selection and cat_sel_event.selection.rows:
+                    sel_cat = exp_by_cat.iloc[cat_sel_event.selection.rows[0]]['category']
+
+                if sel_cat:
+                    cat_data = expense_df[expense_df['category'] == sel_cat]
+                    cat_total = cat_data['abs_amount'].sum()
+                    st.markdown(f"#### 📂 {sel_cat} — €{cat_total:,.2f} ({cat_total/exp_total*100:.0f}% del mese)")
+
+                    # Sotto-ripartizione per tag (sottocategorie)
+                    tag_expl = cat_data.explode('tags')
+                    tag_expl['tags'] = tag_expl['tags'].astype(str)
+                    tag_expl = tag_expl[~tag_expl['tags'].isin(['nan', 'None', ''])]
+                    if not tag_expl.empty:
+                        tag_break = tag_expl.groupby('tags')['abs_amount'].sum().reset_index().sort_values('abs_amount', ascending=False)
+                        tag_break['%'] = tag_break['abs_amount'] / cat_total * 100
+                        th = tag_break.head(12).copy()
+                        th['lbl'] = th['%'].apply(lambda x: f"{x:.0f}%")
+                        fig_tb = px.bar(th, x='tags', y='abs_amount', text='lbl',
+                                        title=f"Per tag — {sel_cat}")
+                        fig_tb.update_layout(height=280, showlegend=False, xaxis_title='', yaxis_title='€')
+                        st.plotly_chart(fig_tb, use_container_width=True)
+
+                        tb_show = tag_break.copy()
+                        tb_show['Importo'] = tb_show['abs_amount'].apply(lambda x: f"€{x:,.2f}")
+                        tb_show['%'] = tb_show['%'].apply(lambda x: f"{x:.1f}%")
+                        st.dataframe(tb_show[['tags', 'Importo', '%']], use_container_width=True,
+                                     hide_index=True, column_config={"tags": "Tag"})
+
+                        def _has_tags(t):
+                            if hasattr(t, 'tolist'):
+                                t = t.tolist()
+                            return isinstance(t, list) and any(x and str(x) not in ('nan', 'None') for x in t)
+                        untag = cat_data[~cat_data['tags'].apply(_has_tags)]['abs_amount'].sum()
+                        if untag > 0:
+                            st.caption(f"Senza tag: €{untag:,.2f} ({untag/cat_total*100:.0f}%)")
+                    else:
+                        st.caption("Nessun tag in questa categoria.")
+
+                    st.markdown("**Transazioni**")
+                    drill = cat_data[['date', 'description', 'amount', 'tags']].sort_values('date', ascending=False)
+                    st.dataframe(drill, use_container_width=True, hide_index=True)
             else:
                 st.info("No expense data for this period.")
 
