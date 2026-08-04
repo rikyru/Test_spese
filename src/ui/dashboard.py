@@ -229,7 +229,6 @@ def render_dashboard(data_manager):
         if filter_mode == "Month":
             from datetime import date
             # Calculate end of selected month
-            import calendar
             last_day = calendar.monthrange(selected_year, selected_month)[1]
             end_of_period = date(selected_year, selected_month, last_day)
             
@@ -331,7 +330,6 @@ def render_dashboard(data_manager):
              # Calculate Pending Recurring for this month
              # We already have `projected_msg` logic earlier, let's reuse/refine.
              from datetime import date
-             import calendar
              last_day = calendar.monthrange(selected_year, selected_month)[1]
              end_of_period = date(selected_year, selected_month, last_day)
              
