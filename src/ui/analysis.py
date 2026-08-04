@@ -7,6 +7,41 @@ import numpy as np
 from src.data_manager import DataManager
 
 
+# ---------------------------------------------------------------------------
+# HELPER: entrate/spese REALI (esclude trasferimenti interni, saldo iniziale,
+# aggiustamenti di saldo). Questi movimenti falsano tasso di risparmio,
+# entrate, confronto YoY e income analysis se contati come entrate/spese.
+# ---------------------------------------------------------------------------
+_INTERNAL_CATEGORIES = {'trasferimento', 'transfer', 'initial balance',
+                        'adjustment', 'saldo iniziale'}
+_INTERNAL_TYPES = {'incoming transfer', 'outgoing transfer', 'transfer', 'adjustment'}
+
+
+def _internal_mask(df):
+    """True per righe che sono trasferimenti interni / saldo iniziale / aggiustamenti."""
+    if df.empty:
+        return pd.Series([], dtype=bool)
+    cat = df['category'].astype('string').fillna('').str.strip().str.lower()
+    typ = df['type'].astype('string').fillna('').str.strip().str.lower()
+    desc = df['description'].astype('string').fillna('').str.lower()
+    return (cat.isin(_INTERNAL_CATEGORIES) | typ.isin(_INTERNAL_TYPES)
+            | desc.str.contains('saldo iniziale', na=False))
+
+
+def real_income(df):
+    """Entrate reali: type 'Income' escludendo trasferimenti/saldi/aggiustamenti."""
+    if df.empty:
+        return df.copy()
+    return df[(df['type'] == 'Income') & (~_internal_mask(df))].copy()
+
+
+def real_expenses(df):
+    """Spese reali: type 'Expense' escludendo trasferimenti/saldi/aggiustamenti."""
+    if df.empty:
+        return df.copy()
+    return df[(df['type'] == 'Expense') & (~_internal_mask(df))].copy()
+
+
 def render_analysis(data_manager: DataManager):
     st.header("Deep Analysis & Forecasting")
 
@@ -83,14 +118,14 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     full_df['date'] = pd.to_datetime(full_df['date'])
     filtered_df['date'] = pd.to_datetime(filtered_df['date'])
 
-    all_expenses = full_df[full_df['type'] == 'Expense'].copy()
+    all_expenses = real_expenses(full_df)
     all_expenses['abs_amount'] = all_expenses['amount'].abs()
     all_expenses['month_year'] = all_expenses['date'].dt.to_period('M')
-    all_income = full_df[full_df['type'] == 'Income'].copy()
+    all_income = real_income(full_df)
 
-    expenses = filtered_df[filtered_df['type'] == 'Expense'].copy()
+    expenses = real_expenses(filtered_df)
     expenses['abs_amount'] = expenses['amount'].abs()
-    income = filtered_df[filtered_df['type'] == 'Income'].copy()
+    income = real_income(filtered_df)
 
     if expenses.empty:
         st.write("No expenses to analyze.")
@@ -254,6 +289,43 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
                 st.success("🎉 Ottimo tasso di risparmio!")
     else:
         st.info("Nessun dato sulle entrate per calcolare il tasso di risparmio.")
+
+    # Trend del tasso di risparmio mese per mese (su tutti i dati)
+    if not all_income.empty:
+        inc_m = all_income.groupby(all_income['date'].dt.to_period('M'))['amount'].sum()
+        exp_m = (all_expenses.groupby('month_year')['abs_amount'].sum()
+                 if not all_expenses.empty else pd.Series(dtype=float))
+        sr = pd.DataFrame({'inc': inc_m}).join(pd.DataFrame({'exp': exp_m}), how='outer').fillna(0.0)
+        sr = sr[sr['inc'] > 0].sort_index()
+        if len(sr) >= 2:
+            sr['rate'] = (sr['inc'] - sr['exp']) / sr['inc'] * 100
+            sr['ma3'] = sr['rate'].rolling(3, min_periods=1).mean()
+            sr['month_str'] = sr.index.astype(str)
+
+            st.markdown("**📈 Tasso di risparmio mese per mese**")
+            bar_colors = ['#00CC96' if v >= 20 else ('#FFB74D' if v >= 10 else '#EF5350')
+                          for v in sr['rate']]
+            fig_sr = go.Figure()
+            fig_sr.add_trace(go.Bar(x=sr['month_str'], y=sr['rate'], name='Mensile',
+                                    marker_color=bar_colors, opacity=0.85))
+            fig_sr.add_trace(go.Scatter(x=sr['month_str'], y=sr['ma3'], name='Media mobile 3m',
+                                        mode='lines', line=dict(color='#2196F3', width=2, dash='dot')))
+            fig_sr.add_hline(y=20, line_dash='dash', line_color='#4CAF50',
+                             annotation_text='Obiettivo 20%', annotation_position='top left')
+            fig_sr.update_layout(height=340, yaxis_title='% risparmio', xaxis_title='Mese',
+                                 hovermode='x unified',
+                                 legend=dict(orientation='h', yanchor='bottom', y=1.02))
+            st.plotly_chart(fig_sr, use_container_width=True)
+
+            recent = sr['rate'].tail(6)
+            if len(recent) >= 3:
+                sr_slope = np.polyfit(np.arange(len(recent)), recent.values, 1)[0]
+                if sr_slope > 0.5:
+                    st.success(f"📈 Il tasso di risparmio è in **miglioramento** (~{sr_slope:+.1f} punti/mese negli ultimi mesi).")
+                elif sr_slope < -0.5:
+                    st.warning(f"📉 Il tasso di risparmio sta **calando** (~{sr_slope:+.1f} punti/mese negli ultimi mesi).")
+                else:
+                    st.info("➡️ Tasso di risparmio **stabile** negli ultimi mesi.")
 
     st.divider()
 
@@ -602,7 +674,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
 
     df['date'] = pd.to_datetime(df['date'])
     df['month_year'] = df['date'].dt.to_period('M').astype(str)
-    expenses = df[df['type'] == 'Expense'].copy()
+    expenses = real_expenses(df)
     expenses['abs_amount'] = expenses['amount'].abs()
 
     if expenses.empty:
@@ -636,7 +708,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
     st.caption("Obiettivo: 50% Bisogni · 30% Desideri · 20% Risparmio")
 
     # Estimate income for the period
-    income_df = filtered_df[filtered_df['type'] == 'Income'].copy() if filtered_df is not None else pd.DataFrame()
+    income_df = real_income(filtered_df) if filtered_df is not None else pd.DataFrame()
     total_income = income_df['amount'].sum() if not income_df.empty else 0
 
     if total_income > 0:
@@ -685,7 +757,7 @@ def render_forecasting(df, full_df=None):
 
     df = df.copy()
     df['date'] = pd.to_datetime(df['date'])
-    monthly_totals = (df[df['type'] == 'Expense']
+    monthly_totals = (real_expenses(df)
                       .groupby(pd.Grouper(key='date', freq='ME'))['amount']
                       .sum().abs())
     monthly_totals = monthly_totals[monthly_totals > 0]
@@ -711,11 +783,29 @@ def render_forecasting(df, full_df=None):
 
     trend_dir = "📈 in crescita" if slope > 5 else ("📉 in calo" if slope < -5 else "➡️ stabile")
 
+    # Previsione stagionale: spesa dello stesso mese dell'anno precedente
+    next_period = monthly_totals.index[-1] + pd.DateOffset(months=1)
+    seasonal_ts = next_period - pd.DateOffset(years=1)
+    seasonal_pred = None
+    for idx, val in monthly_totals.items():
+        if idx.year == seasonal_ts.year and idx.month == seasonal_ts.month:
+            seasonal_pred = float(val)
+            break
+    blend_components = [ma3, wma3, linear_pred] + ([seasonal_pred] if seasonal_pred is not None else [])
+    blended = float(np.mean(blend_components))
+
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Ultimo Mese", f"€{last_val:,.0f}")
     col2.metric("Media Mobile 3m", f"€{ma3:,.0f}")
     col3.metric("Media Ponderata 3m", f"€{wma3:,.0f}", help="Mesi più recenti pesano di più")
     col4.metric("Regressione Lineare", f"€{linear_pred:,.0f}", help=f"Trend: {slope:+.0f} €/mese")
+
+    colS1, colS2 = st.columns(2)
+    colS1.metric("Stagionale (stesso mese anno scorso)",
+                 f"€{seasonal_pred:,.0f}" if seasonal_pred is not None else "N/D",
+                 help="Spesa dello stesso mese dell'anno precedente: cattura la stagionalità.")
+    colS2.metric("🎯 Stima combinata", f"€{blended:,.0f}",
+                 help="Media di media mobile, ponderata, regressione e (se disponibile) stagionale.")
 
     st.caption(f"Trend generale: **{trend_dir}** ({slope:+.0f} €/mese)")
 
@@ -753,6 +843,14 @@ def render_forecasting(df, full_df=None):
         marker=dict(color='#FFA15A', size=14, symbol='diamond')
     ))
 
+    # Seasonal forecast point (same month last year)
+    if seasonal_pred is not None:
+        fig.add_trace(go.Scatter(
+            x=[next_month], y=[seasonal_pred],
+            mode='markers', name='Previsione Stagionale',
+            marker=dict(color='#AB47BC', size=14, symbol='triangle-up')
+        ))
+
     # Linear regression line
     fig.add_trace(go.Scatter(
         x=linear_dates, y=np.maximum(linear_line, 0),
@@ -782,7 +880,7 @@ def render_forecasting(df, full_df=None):
     # --- Per-Category Forecast ---
     st.markdown("### 📂 Previsione per Categoria")
 
-    cat_monthly = (df[df['type'] == 'Expense']
+    cat_monthly = (real_expenses(df)
                    .groupby([pd.Grouper(key='date', freq='ME'), 'category'])['amount']
                    .sum().abs().reset_index())
     cat_monthly.columns = ['date', 'category', 'amount']
@@ -839,10 +937,12 @@ def render_year_scenario(full_df):
     months_elapsed = max(len(ytd['date'].dt.to_period('M').unique()), 1)
     remaining_months = 12 - today.month  # mesi interi rimanenti dopo questo mese
 
-    ytd_income = ytd[ytd['type'] == 'Income']['amount'].sum()
-    ytd_needs = ytd[(ytd['type'] == 'Expense') & (ytd['necessity'] == 'Need')]['amount'].abs().sum()
-    ytd_wants = ytd[(ytd['type'] == 'Expense') & (ytd['necessity'] == 'Want')]['amount'].abs().sum()
-    ytd_other_exp = ytd[(ytd['type'] == 'Expense') & (~ytd['necessity'].isin(['Need', 'Want']))]['amount'].abs().sum()
+    ytd_inc_df = real_income(ytd)
+    ytd_exp_df = real_expenses(ytd)
+    ytd_income = ytd_inc_df['amount'].sum()
+    ytd_needs = ytd_exp_df[ytd_exp_df['necessity'] == 'Need']['amount'].abs().sum()
+    ytd_wants = ytd_exp_df[ytd_exp_df['necessity'] == 'Want']['amount'].abs().sum()
+    ytd_other_exp = ytd_exp_df[~ytd_exp_df['necessity'].isin(['Need', 'Want'])]['amount'].abs().sum()
 
     avg_income = ytd_income / months_elapsed
     avg_needs = ytd_needs / months_elapsed
@@ -952,8 +1052,8 @@ def render_year_scenario(full_df):
     # Mesi passati (YTD)
     for m in range(1, today.month + 1):
         m_df = ytd[ytd['date'].dt.month == m]
-        inc = m_df[m_df['type'] == 'Income']['amount'].sum()
-        exp = m_df[m_df['type'] == 'Expense']['amount'].abs().sum()
+        inc = real_income(m_df)['amount'].sum()
+        exp = real_expenses(m_df)['amount'].abs().sum()
         chart_rows.append({'mese': month_names_it[m], 'num': m,
                            'entrate': inc, 'spese': exp,
                            'tipo': 'Storico'})
@@ -1004,7 +1104,7 @@ def render_year_scenario(full_df):
 def render_income_analysis(full_df, filtered_df):
     st.subheader("💰 Income Analysis")
 
-    full_income = full_df[full_df['type'] == 'Income'].copy()
+    full_income = real_income(full_df)
     full_income['date'] = pd.to_datetime(full_income['date'])
 
     if full_income.empty:
@@ -1014,12 +1114,20 @@ def render_income_analysis(full_df, filtered_df):
     monthly_inc_all = full_income.groupby(pd.Grouper(key='date', freq='ME'))['amount'].sum()
     avg_monthly_all = monthly_inc_all.mean()
 
-    filtered_income = filtered_df[filtered_df['type'] == 'Income'].copy()
+    filtered_income = real_income(filtered_df)
     total_period = filtered_income['amount'].sum()
+    st.caption("Entrate reali: trasferimenti interni, saldo iniziale e aggiustamenti sono esclusi.")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Avg Monthly Income (All Time)", f"€{avg_monthly_all:,.2f}")
     col2.metric("Total Income (Selected Period)", f"€{total_period:,.2f}")
+
+    # Dipendenza dallo stipendio (quota delle entrate del periodo)
+    sal_period = filtered_income[filtered_income['category'] == 'Stipendio']['amount'].sum() if not filtered_income.empty else 0
+    dep_pct = (sal_period / total_period * 100) if total_period > 0 else 0
+    col4.metric("Dipendenza da Stipendio", f"{dep_pct:.0f}%",
+                help="Quota delle entrate del periodo che proviene dallo stipendio. "
+                     "Più è alta, più il reddito dipende da un'unica fonte.")
 
     # Annual Growth Rate
     st.markdown("### 📈 Growth & Trends")
@@ -1110,6 +1218,19 @@ def render_income_analysis(full_df, filtered_df):
             fig_asal.update_layout(height=320)
             st.plotly_chart(fig_asal, use_container_width=True)
 
+        # Dipendenza dallo stipendio nel tempo (stipendio vs altre entrate)
+        fi = full_income.copy()
+        fi['mese'] = fi['date'].dt.to_period('M').astype(str)
+        fi['fonte'] = fi['category'].apply(lambda c: 'Stipendio' if c == 'Stipendio' else 'Altre entrate')
+        comp = fi.groupby(['mese', 'fonte'])['amount'].sum().reset_index()
+        if not comp.empty:
+            fig_dep = px.area(comp, x='mese', y='amount', color='fonte',
+                              title="Stipendio vs Altre Entrate nel Tempo",
+                              labels={'amount': '€', 'mese': 'Mese', 'fonte': 'Fonte'},
+                              color_discrete_map={'Stipendio': '#00CC96', 'Altre entrate': '#636EFA'})
+            fig_dep.update_layout(height=340, hovermode='x unified')
+            st.plotly_chart(fig_dep, use_container_width=True)
+
     st.divider()
 
     st.markdown("### 🏦 Income Sources")
@@ -1137,25 +1258,47 @@ def render_yoy_comparison(full_df):
     st.subheader("📅 Confronto Anno vs Anno")
 
     today = date_type.today()
-    current_year = today.year
-    prev_year = current_year - 1
 
     df = full_df.copy()
     df['date'] = pd.to_datetime(df['date'])
 
-    current_start = pd.Timestamp(current_year, 1, 1)
-    current_end = pd.Timestamp(today)
-    prev_start = pd.Timestamp(prev_year, 1, 1)
-    try:
-        prev_end = pd.Timestamp(prev_year, today.month, today.day)
-    except Exception:
-        prev_end = pd.Timestamp(prev_year, today.month, 28)
+    st.caption("Entrate/spese reali: trasferimenti interni, saldo iniziale e aggiustamenti esclusi.")
+
+    years = sorted(df['date'].dt.year.dropna().unique().tolist())
+    if not years:
+        st.info("Dati insufficienti per il confronto anno su anno.")
+        return
+
+    c_a, c_b, c_mode = st.columns([1, 1, 2])
+    current_year = c_a.selectbox("Anno", years, index=len(years) - 1, key='yoy_year_a')
+    b_options = [y for y in years if y != current_year] or [current_year]
+    default_b_idx = b_options.index(current_year - 1) if (current_year - 1) in b_options else len(b_options) - 1
+    prev_year = c_b.selectbox("Confronta con", b_options, index=default_b_idx, key='yoy_year_b')
+    period_mode = c_mode.radio(
+        "Periodo", ["Anno intero", "Fino a oggi (YTD)"],
+        horizontal=True, key='yoy_mode',
+        help="YTD = dal 1° gennaio alla data odierna, applicato a entrambi gli anni."
+    )
+
+    def _bounds(year):
+        start = pd.Timestamp(year, 1, 1)
+        if period_mode == "Fino a oggi (YTD)":
+            try:
+                end = pd.Timestamp(year, today.month, today.day)
+            except Exception:
+                end = pd.Timestamp(year, today.month, 28)
+        else:
+            end = pd.Timestamp(year, 12, 31)
+        return start, end
+
+    current_start, current_end = _bounds(current_year)
+    prev_start, prev_end = _bounds(prev_year)
 
     curr_df = df[(df['date'] >= current_start) & (df['date'] <= current_end)]
     prev_df = df[(df['date'] >= prev_start) & (df['date'] <= prev_end)]
 
     if curr_df.empty and prev_df.empty:
-        st.info("Dati insufficienti per il confronto anno su anno.")
+        st.info("Nessun dato per gli anni selezionati.")
         return
 
     st.info(
@@ -1164,12 +1307,12 @@ def render_yoy_comparison(full_df):
     )
 
     def period_metrics(period_df):
-        exp = period_df[period_df['type'] == 'Expense']['amount'].abs().sum()
-        inc = period_df[period_df['type'] == 'Income']['amount'].sum()
-        sal = period_df[(period_df['type'] == 'Income') &
-                        (period_df['category'] == 'Stipendio')]['amount'].sum()
+        inc_df = real_income(period_df)
+        exp = real_expenses(period_df)['amount'].abs().sum()
+        inc = inc_df['amount'].sum()
+        sal = inc_df[inc_df['category'] == 'Stipendio']['amount'].sum()
         net = inc - exp
-        months = max(len(period_df['date'].dt.to_period('M').unique()), 1)
+        months = max(len(period_df['date'].dt.to_period('M').unique()), 1) if not period_df.empty else 1
         avg_exp = exp / months
         return exp, inc, net, avg_exp, sal
 
@@ -1206,7 +1349,7 @@ def render_yoy_comparison(full_df):
                       7:'Lug', 8:'Ago', 9:'Set', 10:'Ott', 11:'Nov', 12:'Dic'}
 
     def monthly_expenses_by_month(period_df, year_label):
-        exp = period_df[period_df['type'] == 'Expense'].copy()
+        exp = real_expenses(period_df)
         if exp.empty:
             return pd.DataFrame()
         monthly = exp.groupby(exp['date'].dt.month)['amount'].sum().abs().reset_index()
@@ -1239,8 +1382,8 @@ def render_yoy_comparison(full_df):
     )
 
     def monthly_salary_by_month(period_df, year_label):
-        sal = period_df[(period_df['type'] == 'Income') &
-                        (period_df['category'] == 'Stipendio')].copy()
+        sal = real_income(period_df)
+        sal = sal[sal['category'] == 'Stipendio']
         if sal.empty:
             return pd.DataFrame()
         monthly = sal.groupby(sal['date'].dt.month)['amount'].sum().reset_index()
@@ -1270,7 +1413,7 @@ def render_yoy_comparison(full_df):
     st.markdown("### 📂 Spese per Categoria")
 
     def cat_totals(period_df):
-        exp = period_df[period_df['type'] == 'Expense'].copy()
+        exp = real_expenses(period_df)
         if exp.empty:
             return pd.Series(dtype=float)
         return exp.groupby('category')['amount'].sum().abs()
@@ -1314,7 +1457,7 @@ def render_yoy_comparison(full_df):
         st.markdown("### 🎯 Need vs Want")
 
         def nw_totals(period_df, year_label):
-            exp = period_df[period_df['type'] == 'Expense'].copy()
+            exp = real_expenses(period_df)
             if exp.empty:
                 return {}
             return {
