@@ -26,8 +26,14 @@ class RulesEngine:
             yaml.dump(new_rules, f)
         self.rules = new_rules
 
-    def apply_rules(self, df):
-        """Applies categorization and tagging rules to the dataframe."""
+    def apply_rules(self, df, respect_existing_category=False):
+        """Applies categorization and tagging rules to the dataframe.
+
+        Se `respect_existing_category` è True, le regole per parola chiave NON
+        sovrascrivono le categorie già presenti (es. impostate a mano nel file
+        importato): vengono usate solo per riempire le categorie vuote.
+        La necessità viene comunque derivata dalla categoria finale.
+        """
         if df.empty:
             return df
 
@@ -35,19 +41,28 @@ class RulesEngine:
         # (ensures stale values from old/deleted rules don't persist)
         df['necessity'] = 'Want'
 
+        # Righe che hanno già una categoria valida (da rispettare, se richiesto)
+        if respect_existing_category and 'category' in df.columns:
+            _cat = df['category'].astype('string').fillna('').str.strip().str.lower()
+            has_category = (_cat != '') & (_cat != 'nan') & (_cat != 'none')
+        else:
+            has_category = pd.Series(False, index=df.index)
+
         # Apply Category Rules
         # Rule format: { 'name': 'Groceries', 'match': ['coop', 'conad'] }
         if 'categories' in self.rules:
             for cat_rule in self.rules['categories']:
                 cat_name = cat_rule.get('name')
                 patterns = cat_rule.get('match', [])
-                
+
                 # Create a regex pattern
                 full_regex = '|'.join(patterns)
                 if full_regex:
                     mask = df['description'].str.contains(full_regex, case=False, na=False, regex=True)
+                    # Non sovrascrivere categorie già presenti quando richiesto
+                    mask = mask & (~has_category)
                     df.loc[mask, 'category'] = cat_name
-                    
+
                     # Apply necessity if defined
                     necessity = cat_rule.get('necessity')
                     if necessity:

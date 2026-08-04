@@ -127,15 +127,22 @@ def render_importer(data_manager: DataManager):
         st.subheader("Import Backup/Export")
         uploaded_file = st.file_uploader("Upload ZIP file with CSVs", type="zip")
         
+        respect_cat = st.checkbox(
+            "Rispetta le categorie del file (usa le regole solo per quelle vuote)",
+            value=True,
+            help="Se attivo, le categorie già presenti nel file NON vengono sovrascritte "
+                 "dalle regole per parola chiave. Disattiva per ri-categorizzare tutto dalle regole."
+        )
+
         if uploaded_file:
             # Save temp file
             temp_path = uploaded_file.name
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
-                
+
             if st.button("Process Import"):
                 with st.spinner("Importing and normalizing..."):
-                    success, msg = data_manager.ingest_zip(temp_path)
+                    success, msg = data_manager.ingest_zip(temp_path, respect_existing_category=respect_cat)
                     if success:
                         st.success(f"Done! {msg}")
                         # Clean up

@@ -1579,6 +1579,42 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
     top['Media'] = top['Media'].apply(lambda x: f"€{x:,.2f}")
     st.dataframe(top, use_container_width=True, hide_index=True)
 
+    # Spese per tag: i tag funzionano come sotto-categorie
+    st.markdown("#### 🏷️ Spese per Tag (sotto-categorie)")
+    st.caption("Es. dentro 'Spesa alimentare': supermercato, mercato, macellaio… Una transazione con più tag conta in ciascuno.")
+    td = cat_df.explode('tags')
+    td['tags'] = td['tags'].astype(str).str.strip()
+    td = td[~td['tags'].isin(['nan', 'None', ''])]
+
+    if td.empty:
+        st.caption("Nessun tag nelle transazioni di questa categoria — aggiungi tag per avere le sotto-categorie.")
+    else:
+        tag_sum = (td.groupby('tags')['abs_amount']
+                     .agg(['sum', 'count', 'mean']).reset_index()
+                     .sort_values('sum', ascending=False))
+        tag_sum.columns = ['Tag', 'Totale', 'Volte', 'Media']
+
+        fig_tag = px.bar(tag_sum.head(15), x='Tag', y='Totale',
+                         title=f"Spese per tag — {sel}", color='Tag')
+        fig_tag.update_layout(height=340, showlegend=False, xaxis_title='', yaxis_title='€')
+        st.plotly_chart(fig_tag, use_container_width=True)
+
+        disp_t = tag_sum.copy()
+        disp_t['Totale'] = disp_t['Totale'].apply(lambda x: f"€{x:,.2f}")
+        disp_t['Media'] = disp_t['Media'].apply(lambda x: f"€{x:,.2f}")
+        st.dataframe(disp_t, use_container_width=True, hide_index=True)
+
+        def _has_tags(t):
+            if hasattr(t, 'tolist'):
+                t = t.tolist()
+            if not isinstance(t, list):
+                return False
+            return any(x and str(x) not in ('nan', 'None') for x in t)
+
+        untag_sum = cat_df[~cat_df['tags'].apply(_has_tags)]['abs_amount'].sum()
+        if untag_sum > 0:
+            st.caption(f"Di cui **€{untag_sum:,.0f}** senza alcun tag.")
+
     st.divider()
 
     # Storico aderenza budget — tutte le categorie con budget

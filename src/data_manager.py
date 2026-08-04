@@ -323,7 +323,7 @@ class DataManager:
                 
         return zip_buffer.getvalue()
 
-    def ingest_zip(self, zip_path):
+    def ingest_zip(self, zip_path, respect_existing_category=True):
         """Reads all CSVs from ZIP and inserts into DuckDB."""
         try:
             # Get existing files to avoid duplicates
@@ -345,14 +345,15 @@ class DataManager:
                             
                         with z.open(filename) as f:
                             df = pd.read_csv(f)
-                            self._process_and_insert(df, filename)
+                            self._process_and_insert(df, filename,
+                                                     respect_existing_category=respect_existing_category)
                             count += 1
                             
             return True, f"Imported {count} files. Skipped {skipped} duplicates."
         except Exception as e:
             return False, str(e)
 
-    def _process_and_insert(self, df, filename):
+    def _process_and_insert(self, df, filename, respect_existing_category=True):
         # Normalize columns based on known schema
         # Schema: Date, Wallet, Type, Category name, Amount, Currency, Note, Labels, Author
         
@@ -397,8 +398,8 @@ class DataManager:
         with open("debug_log.txt", "a") as f:
             f.write(f"--- New Insert ---\nInput DF Tags:\n{df['tags'].tolist()}\n")
 
-        # Apply Rules Engine
-        df = self.rules_engine.apply_rules(df)
+        # Apply Rules Engine (di default rispetta le categorie già presenti nel file)
+        df = self.rules_engine.apply_rules(df, respect_existing_category=respect_existing_category)
         
         # --- Smart Import: Learn from History ---
         try:
