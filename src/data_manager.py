@@ -11,9 +11,84 @@ class DataManager:
             # Check if finance_data folder exists, otherwise use root
             default_path = "finance_data/finance.duckdb" if os.path.exists("finance_data") else "finance.duckdb"
             db_path = os.getenv("DB_PATH", default_path)
+        self.db_path = db_path
         self.con = duckdb.connect(db_path)
         self.rules_engine = RulesEngine()
         self.setup_db()
+
+    def auto_backup(self, max_keep=14):
+        """
+        Crea un backup ZIP giornaliero in <cartella_dati>/backups (uno al giorno),
+        mantenendo solo gli ultimi `max_keep`. Ritorna il path se creato adesso,
+        altrimenti None (backup di oggi già presente).
+        """
+        import glob
+        import datetime
+        data_dir = os.path.dirname(self.db_path) or '.'
+        bdir = os.path.join(data_dir, 'backups')
+        try:
+            os.makedirs(bdir, exist_ok=True)
+        except Exception:
+            return None
+        today = datetime.date.today().strftime('%Y%m%d')
+        fname = os.path.join(bdir, f'finance_backup_{today}.zip')
+        created = None
+        if not os.path.exists(fname):
+            try:
+                data = self.export_backup_zip()
+                with open(fname, 'wb') as f:
+                    f.write(data)
+                created = fname
+            except Exception:
+                return None
+        # Rotazione: tieni solo gli ultimi max_keep
+        try:
+            files = sorted(glob.glob(os.path.join(bdir, 'finance_backup_*.zip')))
+            for old in files[:-max_keep]:
+                try:
+                    os.remove(old)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return created
+
+    def list_backups(self):
+        """Ritorna la lista dei backup automatici disponibili (path, ordinati recenti prima)."""
+        import glob
+        data_dir = os.path.dirname(self.db_path) or '.'
+        bdir = os.path.join(data_dir, 'backups')
+        try:
+            return sorted(glob.glob(os.path.join(bdir, 'finance_backup_*.zip')), reverse=True)
+        except Exception:
+            return []
+
+    def add_transfer(self, from_account, to_account, amount, date, description=''):
+        """
+        Registra un trasferimento tra due portafogli come coppia
+        Outgoing/Incoming Transfer (netto zero, escluso da entrate/spese reali).
+        """
+        if not from_account or not to_account or from_account == to_account:
+            return False
+        amt = abs(float(amount))
+        if amt <= 0:
+            return False
+        desc = description or f"Trasferimento {from_account} → {to_account}"
+        self.con.execute("""
+            INSERT INTO transactions
+                (id, date, amount, currency, account, category, tags, description,
+                 type, source_file, original_description, necessity)
+            VALUES (uuid(), ?, ?, 'EUR', ?, 'Trasferimento', [], ?,
+                    'Outgoing Transfer', 'manual_transfer', ?, 'Need')
+        """, [date, -amt, from_account, desc, desc])
+        self.con.execute("""
+            INSERT INTO transactions
+                (id, date, amount, currency, account, category, tags, description,
+                 type, source_file, original_description, necessity)
+            VALUES (uuid(), ?, ?, 'EUR', ?, 'Trasferimento', [], ?,
+                    'Incoming Transfer', 'manual_transfer', ?, 'Need')
+        """, [date, amt, to_account, desc, desc])
+        return True
 
     def setup_db(self):
         self.con.execute("""

@@ -4,8 +4,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from src.data_manager import DataManager
 import datetime
+import calendar
 from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
+from src.ui.analysis import real_income, real_expenses
 
 def render_dashboard(data_manager):
     st.header("Dashboard")
@@ -66,7 +68,88 @@ def render_dashboard(data_manager):
         account_filter = f4.multiselect("Conti", options=all_accounts, placeholder="Tutti i conti")
         if account_filter:
             filtered_df = filtered_df[filtered_df['account'].isin(account_filter)]
-        
+
+        # --- Riepilogo del mese + Calendario (solo modalità Mese) ---
+        if filter_mode == "Month" and selected_year and selected_month:
+            m_exp_df = real_expenses(filtered_df)
+            m_inc_df = real_income(filtered_df)
+            m_exp = m_exp_df['amount'].abs().sum()
+            m_inc = m_inc_df['amount'].sum()
+            m_net = m_inc - m_exp
+            m_rate = (m_net / m_inc * 100) if m_inc > 0 else 0
+
+            # Mese precedente (per il delta)
+            pm = selected_month - 1 if selected_month > 1 else 12
+            py = selected_year if selected_month > 1 else selected_year - 1
+            p_exp = real_expenses(df[(df['year'] == py) & (df['month'] == pm)])['amount'].abs().sum()
+            delta_exp = m_exp - p_exp
+
+            month_lbl = f"{month_names[selected_month]} {selected_year}"
+            st.subheader(f"📋 Riepilogo {month_lbl}")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Speso", f"€{m_exp:,.0f}",
+                      delta=(f"{delta_exp:+,.0f}€ vs mese prec." if p_exp > 0 else None),
+                      delta_color="inverse")
+            r2.metric("Entrate", f"€{m_inc:,.0f}")
+            r3.metric("Risparmio", f"€{m_net:,.0f}")
+            r4.metric("Tasso Risparmio", f"{m_rate:.0f}%")
+
+            # Riga narrativa: categoria top, spesa più grande, stato budget
+            bits = []
+            mm = m_exp_df.copy()
+            if not mm.empty:
+                mm['abs'] = mm['amount'].abs()
+                byc = mm.groupby('category')['abs'].sum().sort_values(ascending=False)
+                if not byc.empty:
+                    bits.append(f"Categoria top: **{byc.index[0]}** (€{byc.iloc[0]:,.0f})")
+                big = mm.sort_values('abs', ascending=False).iloc[0]
+                bits.append(f"Spesa più grande: **€{abs(big['amount']):,.0f}** ({big['category']})")
+                budgets = re.rules.get('budgets', {})
+                if budgets:
+                    over = sum(1 for c, b in budgets.items() if b and byc.get(c, 0) > b)
+                    bits.append(f"⚠️ **{over}** categorie oltre budget" if over else "✅ Budget rispettati")
+            if bits:
+                st.caption("  ·  ".join(bits))
+
+            # Calendario spese del mese (heatmap giornaliera)
+            if not mm.empty:
+                day_exp = mm.groupby(mm['date'].dt.day)['abs'].sum()
+                weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(selected_year, selected_month)
+                z, txt = [], []
+                for wk in weeks:
+                    zr, tr = [], []
+                    for d in wk:
+                        if d == 0:
+                            zr.append(None); tr.append("")
+                        else:
+                            v = float(day_exp.get(d, 0) or 0)
+                            zr.append(v)
+                            tr.append(f"<b>{d}</b><br>€{v:,.0f}" if v > 0 else f"{d}")
+                    z.append(zr); txt.append(tr)
+                x_lbl = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom']
+                y_lbl = [f"S{i+1}" for i in range(len(weeks))]
+                fig_cal = go.Figure(go.Heatmap(
+                    z=z, text=txt, texttemplate="%{text}", hoverinfo='text',
+                    x=x_lbl, y=y_lbl, colorscale='Oranges', showscale=False, xgap=3, ygap=3))
+                fig_cal.update_yaxes(autorange='reversed', showticklabels=False)
+                fig_cal.update_layout(height=70 + len(weeks) * 60,
+                                      margin=dict(l=6, r=6, t=6, b=6))
+                with st.expander("📅 Calendario spese del mese", expanded=False):
+                    cal_event = st.plotly_chart(fig_cal, use_container_width=True,
+                                                on_select="rerun", key="cal_heat")
+                    if cal_event and cal_event.selection and cal_event.selection.points:
+                        p = cal_event.selection.points[0]
+                        try:
+                            xi = x_lbl.index(p['x']); yi = y_lbl.index(p['y'])
+                            day_num = weeks[yi][xi]
+                            if day_num > 0:
+                                day_tx = filtered_df[filtered_df['date'].dt.day == day_num]
+                                st.markdown(f"**Transazioni del {day_num} {month_names[selected_month]}**")
+                                st.dataframe(day_tx[['date', 'description', 'category', 'amount', 'tags']]
+                                             .sort_values('date'), hide_index=True, use_container_width=True)
+                        except Exception:
+                            pass
+
         # --- 0. Liquidity Overview (New) ---
         st.divider()
         st.subheader("💳 Wallet & Liquidity")

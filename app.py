@@ -33,6 +33,14 @@ if 'recurring_autogen' not in st.session_state:
         st.session_state['recurring_autogen_count'] = 0
     st.session_state['recurring_autogen'] = True
 
+# Backup automatico giornaliero (una volta per sessione)
+if 'auto_backup_done' not in st.session_state:
+    try:
+        dm.auto_backup()
+    except Exception:
+        pass
+    st.session_state['auto_backup_done'] = True
+
 # Sidebar Navigation
 st.sidebar.title("💰 Finance App")
 
@@ -187,8 +195,35 @@ with st.sidebar.expander("➕ Aggiungi Transazione", expanded=False):
 
 st.sidebar.divider()
 
+# Trasferimento tra conti
+with st.sidebar.expander("🔄 Trasferimento tra conti", expanded=False):
+    _tf_accs = dm.get_unique_accounts()
+    if len(_tf_accs) >= 2:
+        with st.form("transfer_form", clear_on_submit=True):
+            tf_from = st.selectbox("Da", _tf_accs, key='tf_from')
+            tf_to = st.selectbox("A", _tf_accs, index=1, key='tf_to')
+            tf_amount = st.number_input("Importo €", min_value=0.0, step=0.01, format="%.2f", key='tf_amt')
+            tf_date = st.date_input("Data", datetime.today(), key='tf_date')
+            if st.form_submit_button("🔄 Trasferisci", use_container_width=True, type="primary"):
+                if tf_from == tf_to:
+                    st.warning("Scegli due conti diversi.")
+                elif tf_amount <= 0:
+                    st.warning("L'importo deve essere > 0.")
+                else:
+                    if dm.add_transfer(tf_from, tf_to, tf_amount, pd.to_datetime(tf_date).date()):
+                        st.toast(f"Trasferiti €{tf_amount:,.2f}: {tf_from} → {tf_to}", icon="🔄")
+                        st.rerun()
+    else:
+        st.caption("Servono almeno 2 conti per un trasferimento.")
+
+st.sidebar.divider()
+
 # Backup & Restore
 with st.sidebar.expander("💾 Backup & Ripristino", expanded=False):
+    _bks = dm.list_backups()
+    if _bks:
+        _last = os.path.basename(_bks[0]).replace('finance_backup_', '').replace('.zip', '')
+        st.caption(f"🗂️ Backup automatici: {len(_bks)} · ultimo {_last}")
     zip_data = dm.export_backup_zip()
     st.download_button(
         label="⬇️ Esporta Backup",
