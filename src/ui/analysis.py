@@ -55,6 +55,49 @@ def _is_subscription(tags):
     return any(str(x).lower() in SUBSCRIPTION_TAGS for x in _tags_list(tags))
 
 
+# --- Accuratezza: mese parziale, freschezza dati, entrate straordinarie ---
+EXTRAORDINARY_INCOME_CATS = {'regali', 'entrate aggiuntive', 'rimborsi', 'rimborso', 'bonus'}
+
+
+def in_progress_period(df):
+    """
+    Periodo mensile ancora IN CORSO (mese odierno non ancora concluso e con dati),
+    altrimenti None. Serve a escludere il mese parziale dalle medie/proiezioni.
+    """
+    if df.empty:
+        return None
+    today = pd.Timestamp.today()
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    if today.day >= last_day:
+        return None
+    cur = pd.Period(today, freq='M')
+    d = pd.to_datetime(df['date'])
+    return cur if (d.dt.to_period('M') == cur).any() else None
+
+
+def drop_in_progress(monthly_series, df):
+    """Rimuove il mese in corso (parziale) da una serie mensile (indice Period o Timestamp)."""
+    ip = in_progress_period(df)
+    if ip is None or monthly_series.empty:
+        return monthly_series
+    try:
+        as_period = pd.PeriodIndex(pd.to_datetime(monthly_series.index.to_timestamp()
+                                   if hasattr(monthly_series.index, 'to_timestamp')
+                                   else monthly_series.index), freq='M')
+    except Exception:
+        as_period = pd.PeriodIndex([pd.Period(x, freq='M') for x in monthly_series.index], freq='M')
+    return monthly_series[as_period != ip]
+
+
+def split_income(inc_df):
+    """Divide le entrate reali in (ordinarie, straordinarie) per categoria."""
+    if inc_df is None or inc_df.empty:
+        return inc_df, inc_df
+    cat = inc_df['category'].astype('string').fillna('').str.strip().str.lower()
+    extra = cat.isin(EXTRAORDINARY_INCOME_CATS)
+    return inc_df[~extra], inc_df[extra]
+
+
 def render_analysis(data_manager: DataManager):
     st.header("Deep Analysis & Forecasting")
 
@@ -65,6 +108,18 @@ def render_analysis(data_manager: DataManager):
     df['date'] = pd.to_datetime(df['date'])
     df['year'] = df['date'].dt.year
     df['month'] = df['date'].dt.month
+
+    # Freschezza dati: le analisi "a oggi" sono affidabili solo se i dati sono recenti
+    _ref = df['date'].max()
+    _age = (pd.Timestamp.today().normalize() - _ref.normalize()).days
+    if _age <= 3:
+        st.caption(f"🟢 Dati aggiornati al {_ref.strftime('%d/%m/%Y')}")
+    elif _age <= 20:
+        st.caption(f"🟡 Dati aggiornati al {_ref.strftime('%d/%m/%Y')} · {_age} giorni fa")
+    else:
+        st.warning(f"⚠️ Ultimo dato: {_ref.strftime('%d/%m/%Y')} ({_age} giorni fa). "
+                   "Alcune analisi 'a oggi' potrebbero non riflettere i movimenti recenti — "
+                   "aggiungi/importa le transazioni mancanti.")
 
     # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
     min_date = df['date'].min().date()
@@ -163,15 +218,22 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     last_month_exp = expenses[expenses['month_year'] == last_month_period]
 
     if not last_month_exp.empty:
-        # Use actual calendar days of the month, not transaction date range
-        days_in_period = calendar.monthrange(last_month_period.year, last_month_period.month)[1]
+        days_in_month = calendar.monthrange(last_month_period.year, last_month_period.month)[1]
+        ip = in_progress_period(full_df)
+        partial_note = ""
+        if ip is not None and last_month_period == ip:
+            # Mese in corso: dividi per i giorni TRASCORSI, non per il mese intero
+            days_in_period = max(int(last_month_exp['date'].dt.day.max()), 1)
+            partial_note = f" · mese in corso ({days_in_period}g)"
+        else:
+            days_in_period = days_in_month
         daily_burn = last_month_exp['abs_amount'].sum() / days_in_period
 
         prev_month_period = last_month_period - 1
         prev_month_exp = expenses[expenses['month_year'] == prev_month_period]
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("Spesa Media Giornaliera", f"€{daily_burn:,.2f}")
+        col1.metric("Spesa Media Giornaliera", f"€{daily_burn:,.2f}", help=f"Su {days_in_period} giorni{partial_note}")
         col2.metric("Totale Mese Corrente", f"€{last_month_exp['abs_amount'].sum():,.2f}")
 
         if not prev_month_exp.empty:
@@ -342,12 +404,16 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
                  if not all_expenses.empty else pd.Series(dtype=float))
         sr = pd.DataFrame({'inc': inc_m}).join(pd.DataFrame({'exp': exp_m}), how='outer').fillna(0.0)
         sr = sr[sr['inc'] > 0].sort_index()
+        sr = drop_in_progress(sr, full_df)   # escludi il mese parziale in corso
         if len(sr) >= 2:
             sr['rate'] = (sr['inc'] - sr['exp']) / sr['inc'] * 100
             sr['ma3'] = sr['rate'].rolling(3, min_periods=1).mean()
             sr['month_str'] = sr.index.astype(str)
+            median_rate = sr['rate'].median()
 
-            st.markdown("**📈 Tasso di risparmio mese per mese**")
+            st.markdown(f"**📈 Tasso di risparmio mese per mese**  ·  tipico (mediana): **{median_rate:.0f}%**")
+            st.caption("Mese in corso escluso. La mediana è più robusta della media contro i mesi eccezionali "
+                       "(tredicesima, bonus, regali).")
             bar_colors = ['#00CC96' if v >= 20 else ('#FFB74D' if v >= 10 else '#EF5350')
                           for v in sr['rate']]
             fig_sr = go.Figure()
@@ -355,6 +421,8 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
                                     marker_color=bar_colors, opacity=0.85))
             fig_sr.add_trace(go.Scatter(x=sr['month_str'], y=sr['ma3'], name='Media mobile 3m',
                                         mode='lines', line=dict(color='#2196F3', width=2, dash='dot')))
+            fig_sr.add_hline(y=median_rate, line_dash='dot', line_color='#7E57C2',
+                             annotation_text=f'Mediana {median_rate:.0f}%', annotation_position='top right')
             fig_sr.add_hline(y=20, line_dash='dash', line_color='#4CAF50',
                              annotation_text='Obiettivo 20%', annotation_position='top left')
             fig_sr.update_layout(height=340, yaxis_title='% risparmio', xaxis_title='Mese',
@@ -779,9 +847,21 @@ def render_forecasting(df, full_df=None, data_manager=None):
                       .sum().abs())
     monthly_totals = monthly_totals[monthly_totals > 0]
 
+    # Escludi il mese in corso (parziale): altrimenti media mobile e trend risultano
+    # falsamente bassi perché il mese non è ancora concluso.
+    partial_val = None
+    ip = in_progress_period(df)
+    if ip is not None and len(monthly_totals) > 0:
+        if pd.Period(monthly_totals.index[-1], freq='M') == ip:
+            partial_val = float(monthly_totals.iloc[-1])
+            monthly_totals = monthly_totals.iloc[:-1]
+
     if len(monthly_totals) < 3:
-        st.write("Servono almeno 3 mesi di dati per il forecast.")
+        st.write("Servono almeno 3 mesi completi di dati per il forecast.")
         return
+
+    if partial_val is not None:
+        st.caption(f"ℹ️ Mese in corso escluso dai calcoli (parziale: €{partial_val:,.0f} finora).")
 
     # --- Metrics ---
     ma3 = monthly_totals.iloc[-3:].mean()
@@ -1161,15 +1241,25 @@ def render_income_analysis(full_df, filtered_df):
         return
 
     monthly_inc_all = full_income.groupby(pd.Grouper(key='date', freq='ME'))['amount'].sum()
-    avg_monthly_all = monthly_inc_all.mean()
+    monthly_inc_complete = drop_in_progress(monthly_inc_all, full_df)
+    _base = monthly_inc_complete if not monthly_inc_complete.empty else monthly_inc_all
+    typical_monthly = _base.median()
+    mean_monthly = _base.mean()
 
     filtered_income = real_income(filtered_df)
     total_period = filtered_income['amount'].sum()
-    st.caption("Entrate reali: trasferimenti interni, saldo iniziale e aggiustamenti sono esclusi.")
+    ord_inc_df, extra_inc_df = split_income(filtered_income)
+    ord_period = ord_inc_df['amount'].sum() if not ord_inc_df.empty else 0
+    extra_period = extra_inc_df['amount'].sum() if not extra_inc_df.empty else 0
+
+    st.caption("Entrate reali (trasferimenti/saldo/aggiustamenti esclusi). "
+               "Entrata tipica = mediana dei mesi completi, robusta a tredicesima/bonus.")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Avg Monthly Income (All Time)", f"€{avg_monthly_all:,.2f}")
-    col2.metric("Total Income (Selected Period)", f"€{total_period:,.2f}")
+    col1.metric("Entrata Mensile Tipica", f"€{typical_monthly:,.0f}",
+                help=f"Mediana dei mesi completi (media €{mean_monthly:,.0f}).")
+    col2.metric("Entrate Periodo", f"€{total_period:,.0f}",
+                help=f"Ordinarie €{ord_period:,.0f} · Straordinarie €{extra_period:,.0f}")
 
     # Dipendenza dallo stipendio (quota delle entrate del periodo)
     sal_period = filtered_income[filtered_income['category'] == 'Stipendio']['amount'].sum() if not filtered_income.empty else 0
@@ -1177,6 +1267,11 @@ def render_income_analysis(full_df, filtered_df):
     col4.metric("Dipendenza da Stipendio", f"{dep_pct:.0f}%",
                 help="Quota delle entrate del periodo che proviene dallo stipendio. "
                      "Più è alta, più il reddito dipende da un'unica fonte.")
+
+    if extra_period > 0 and total_period > 0:
+        st.caption(f"Nel periodo: entrate **ordinarie €{ord_period:,.0f}** · "
+                   f"**straordinarie €{extra_period:,.0f}** (regali/bonus/rimborsi, "
+                   f"{extra_period/total_period*100:.0f}% del totale).")
 
     # Annual Growth Rate
     st.markdown("### 📈 Growth & Trends")
