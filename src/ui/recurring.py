@@ -130,7 +130,7 @@ def render_recurring(data_manager: DataManager):
                    
             with col2:
                 r_acc = st.selectbox("Account/Wallet", data_manager.get_unique_accounts())
-                r_freq = st.selectbox("Frequency", ["Monthly", "Weekly", "Yearly"])
+                r_freq = st.selectbox("Frequency", ["Monthly", "Bimonthly", "Quarterly", "Yearly", "Weekly"])
                 r_date = st.date_input("Next Due Date")
 
 
@@ -140,11 +140,16 @@ def render_recurring(data_manager: DataManager):
             r_duration_type = st.radio("Stop condition", ["Indefinite (Forever)", "Fixed Installments (Rate)", "Until Date (Ends on)"], horizontal=True, index=0)
             
             r_installments = None
+            r_installments_total = None
             r_end_date = None
-            
+
             if r_duration_type == "Fixed Installments (Rate)":
-                r_installments = st.number_input("Number of Installments", min_value=1, value=3, step=1)
-                st.caption(f"Will stop after {r_installments} occurrences.")
+                ci1, ci2 = st.columns(2)
+                r_inst_total = ci1.number_input("Rate totali", min_value=1, value=4, step=1)
+                r_inst_paid = ci2.number_input("Rate già pagate", min_value=0, value=0, step=1)
+                r_installments = max(int(r_inst_total) - int(r_inst_paid), 0)
+                r_installments_total = int(r_inst_total)
+                st.caption(f"Rimangono {r_installments} rate su {r_inst_total} (es. condominio: totale 4, già pagate 2).")
             elif r_duration_type == "Until Date (Ends on)":
                 r_end_date = st.date_input("End Date (Inclusive)")
                 st.caption("Will stop generating after this date.")
@@ -176,7 +181,7 @@ def render_recurring(data_manager: DataManager):
                     # Final Description fallback
                     final_desc = r_desc if r_desc else r_name
                     
-                    data_manager.add_recurring(r_name, r_amount, r_cat, r_acc, r_freq, r_date, final_desc, final_tags, r_installments, r_end_date)
+                    data_manager.add_recurring(r_name, r_amount, r_cat, r_acc, r_freq, r_date, final_desc, final_tags, r_installments, r_end_date, r_installments_total)
                     st.success(f"Recurring expense '{r_name}' added!")
                     st.rerun()
 
@@ -184,9 +189,26 @@ def render_recurring(data_manager: DataManager):
 
     # --- List Existing ---
     st.subheader("📋 Active Templates")
-    
+
     rec_df = data_manager.get_recurring()
-    
+
+    # Avanzamento rate (per gli impegni con numero di rate definito)
+    if not rec_df.empty and 'installments_total' in rec_df.columns:
+        with_progress = rec_df[rec_df['installments_total'].notna() &
+                               rec_df['remaining_installments'].notna()]
+        if not with_progress.empty:
+            st.markdown("**📊 Avanzamento rate**")
+            for _, r in with_progress.iterrows():
+                tot = int(r['installments_total'])
+                rem = int(r['remaining_installments'])
+                paid = max(tot - rem, 0)
+                amt = abs(float(r['amount']))
+                pct = (paid / tot) if tot else 0
+                st.markdown(f"**{r['name']}** — pagate {paid}/{tot} · "
+                            f"restano **{rem} rate** (€{rem * amt:,.0f}) · rata €{amt:,.0f}")
+                st.progress(min(pct, 1.0), text=f"{pct * 100:.0f}% completato")
+            st.divider()
+
     if not rec_df.empty:
         # Display as a table with more details
         
@@ -196,7 +218,8 @@ def render_recurring(data_manager: DataManager):
             "amount": st.column_config.NumberColumn("Amount", format="€%.2f", required=True),
             "category": st.column_config.SelectboxColumn("Category", options=data_manager.get_unique_categories() + ["Other"], required=True),
             "account": st.column_config.SelectboxColumn("Account", options=data_manager.get_unique_accounts(), required=True),
-            "frequency": st.column_config.SelectboxColumn("Frequency", options=["Monthly", "Weekly", "Yearly"], required=True),
+            "frequency": st.column_config.SelectboxColumn("Frequency", options=["Monthly", "Bimonthly", "Quarterly", "Yearly", "Weekly"], required=True),
+            "installments_total": st.column_config.NumberColumn("Rate totali", help="Numero totale di rate (per la barra di avanzamento)", min_value=1),
             "next_date": st.column_config.DateColumn("Next Due", required=True),
             "end_date": st.column_config.DateColumn("Ends On"),
             "remaining_installments": st.column_config.NumberColumn("Installments Left", help="Remaining payments", min_value=0),

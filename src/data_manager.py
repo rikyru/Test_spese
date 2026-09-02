@@ -5,6 +5,19 @@ import os
 from .utils import clean_currency, normalize_tags
 from .rules_engine import RulesEngine
 
+# Frequenze ricorrenti -> passo in mesi (Weekly gestito a parte)
+FREQ_MONTHS = {'Monthly': 1, 'Bimonthly': 2, 'Quarterly': 3, 'Yearly': 12}
+
+
+def advance_date(d, frequency):
+    """Avanza una data secondo la frequenza della ricorrente."""
+    import datetime as _dt
+    from dateutil.relativedelta import relativedelta
+    if frequency == 'Weekly':
+        return d + _dt.timedelta(weeks=1)
+    return d + relativedelta(months=FREQ_MONTHS.get(frequency, 1))
+
+
 class DataManager:
     def __init__(self, db_path=None):
         if db_path is None:
@@ -156,16 +169,21 @@ class DataManager:
                 self.con.execute("ALTER TABLE recurring_expenses ADD COLUMN remaining_installments INTEGER")
             if 'end_date' not in col_names:
                 self.con.execute("ALTER TABLE recurring_expenses ADD COLUMN end_date DATE")
+            if 'installments_total' not in col_names:
+                self.con.execute("ALTER TABLE recurring_expenses ADD COLUMN installments_total INTEGER")
         except Exception as e:
             print(f"Recurring Migration error: {e}")
 
     # ... (ingest_zip and other methods remain)
 
-    def add_recurring(self, name, amount, category, account, frequency, start_date, description, tags, installments=None, end_date=None):
+    def add_recurring(self, name, amount, category, account, frequency, start_date, description, tags, installments=None, end_date=None, installments_total=None):
+        # Se non specificato, il totale rate parte da quelle rimanenti (paid=0)
+        if installments_total is None and installments is not None:
+            installments_total = installments
         self.con.execute("""
-            INSERT INTO recurring_expenses (name, amount, category, account, frequency, next_date, description, tags, remaining_installments, end_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [name, amount, category, account, frequency, start_date, description, tags, installments, end_date])
+            INSERT INTO recurring_expenses (name, amount, category, account, frequency, next_date, description, tags, remaining_installments, end_date, installments_total)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [name, amount, category, account, frequency, start_date, description, tags, installments, end_date, installments_total])
 
     def update_recurring(self, rec_id, **kwargs):
         """
@@ -177,7 +195,7 @@ class DataManager:
         set_parts = []
         values = []
         
-        valid_cols = {'name', 'amount', 'category', 'account', 'frequency', 'next_date', 'description', 'tags', 'remaining_installments', 'end_date'}
+        valid_cols = {'name', 'amount', 'category', 'account', 'frequency', 'next_date', 'description', 'tags', 'remaining_installments', 'end_date', 'installments_total'}
         
         for k, v in kwargs.items():
             if k in valid_cols:
@@ -322,14 +340,8 @@ class DataManager:
             """, [row['next_date'], row['amount'], row['account'], row['category'], current_tags, desc, row['name']])
             
             # Update next_date
-            next_date = pd.to_datetime(row['next_date']).date()
-            if row['frequency'] == 'Monthly':
-                next_date += relativedelta(months=1)
-            elif row['frequency'] == 'Yearly':
-                next_date += relativedelta(years=1)
-            elif row['frequency'] == 'Weekly':
-                next_date += datetime.timedelta(weeks=1)
-            
+            next_date = advance_date(pd.to_datetime(row['next_date']).date(), row['frequency'])
+
             self.con.execute("UPDATE recurring_expenses SET next_date = ? WHERE id = ?", [next_date, row['id']])
             
             # Handle Installments decrement
@@ -443,15 +455,8 @@ class DataManager:
                     rem_inst -= 1
                 
                 # Advance date
-                if rule['frequency'] == 'Monthly':
-                    current_next += relativedelta(months=1)
-                elif rule['frequency'] == 'Yearly':
-                    current_next += relativedelta(years=1)
-                elif rule['frequency'] == 'Weekly':
-                    current_next += datetime.timedelta(weeks=1)
-                else:
-                    break # Safer
-                    
+                current_next = advance_date(current_next, rule['frequency'])
+
         return pd.DataFrame(projections)
 
 
