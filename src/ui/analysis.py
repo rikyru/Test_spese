@@ -2031,9 +2031,7 @@ def render_financial_health(full_df, data_manager):
 def render_commitments_calendar(full_df, data_manager):
     from datetime import date as date_type
     st.divider()
-    st.subheader("📆 Calendario impegni (fino a dicembre)")
-    if data_manager is None:
-        return
+    st.subheader("📆 Calendario liquidità (fino a dicembre)")
 
     df = full_df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -2046,41 +2044,27 @@ def render_commitments_calendar(full_df, data_manager):
     exp['period'] = exp['date'].dt.to_period('M')
     inc = real_income(df).copy()
     ip = in_progress_period(df)
-    is_rec = (exp['source_file'] == 'Recurring') if 'source_file' in exp.columns else pd.Series(False, index=exp.index)
-    is_fatt = exp['category'].astype('string').fillna('').str.strip().str.lower().eq('fatture')
 
-    # Entrata tipica mensile (mediana mesi completi)
+    # Un solo numero onesto: la SPESA TIPICA mensile = mediana del totale speso nei
+    # mesi completi (include già tutto: mutuo, condominio, bollette, spesa...).
+    # Niente doppio conteggio.
+    tot_s = exp.groupby('period')['abs'].sum()
+    if ip is not None and ip in tot_s.index:
+        tot_s = tot_s.drop(ip)
+    typ_spend = float(tot_s.median()) if not tot_s.empty else 0.0
+
     inc_s = inc.assign(p=pd.to_datetime(inc['date']).dt.to_period('M')).groupby('p')['amount'].sum()
     if ip is not None and ip in inc_s.index:
         inc_s = inc_s.drop(ip)
     typ_income = float(inc_s.median()) if not inc_s.empty else 0.0
 
-    # Variabile tipico mensile (escluse ricorrenti e bollette; mediana mesi completi)
-    var_s = exp[(~is_rec) & (~is_fatt)].groupby('period')['abs'].sum()
-    if ip is not None and ip in var_s.index:
-        var_s = var_s.drop(ip)
-    typ_var = float(var_s.median()) if not var_s.empty else 0.0
+    if typ_spend == 0 and typ_income == 0:
+        st.info("Dati insufficienti per il calendario.")
+        return
 
-    # Impegni noti (ricorrenti/rate) futuri, per mese — ESATTI
-    rec_by_month = {}
-    try:
-        proj_rec = data_manager.get_projected_recurring(date_type(cy, 12, 31))
-        if not proj_rec.empty:
-            proj_rec = proj_rec.copy()
-            proj_rec['date'] = pd.to_datetime(proj_rec['date'])
-            fut = proj_rec[(proj_rec['date'].dt.date > today) & (proj_rec['amount'] < 0)].copy()
-            if not fut.empty:
-                fut['abs'] = fut['amount'].abs()
-                rec_by_month = fut.groupby(fut['date'].dt.month)['abs'].sum().to_dict()
-    except Exception:
-        pass
-
-    # Bollette stimate per stagionalità: categoria Fatture (non ricorrenti) dello
-    # stesso mese dell'anno scorso; fallback = mediana bollette di quest'anno.
-    bills_ly = exp[is_fatt & (~is_rec) & (exp['date'].dt.year == cy - 1)]
-    bills_by_month = bills_ly.groupby(bills_ly['date'].dt.month)['abs'].sum().to_dict()
-    fatt_this = exp[is_fatt & (~is_rec) & (exp['date'].dt.year == cy)]
-    fatt_med = float(fatt_this.groupby('period')['abs'].sum().median()) if not fatt_this.empty else 0.0
+    st.caption("Proiezione su un 'mese tipico': entrate e spese sono la **mediana** dei mesi completi "
+               "(la spesa include già tutto ciò che registri — mutuo, bollette, spesa...). "
+               "Serve a vedere la traiettoria della liquidità, non il singolo movimento.")
 
     month_names_it = {1:'Gen', 2:'Feb', 3:'Mar', 4:'Apr', 5:'Mag', 6:'Giu',
                       7:'Lug', 8:'Ago', 9:'Set', 10:'Ott', 11:'Nov', 12:'Dic'}
@@ -2088,43 +2072,52 @@ def render_commitments_calendar(full_df, data_manager):
     rows = []
     liq = net_worth
     for m in range(today.month + 1, 13):
-        impegni = float(rec_by_month.get(m, 0.0))
-        bollette = float(bills_by_month.get(m, fatt_med))
-        variabile = typ_var
-        spese = impegni + bollette + variabile
-        net = typ_income - spese
+        net = typ_income - typ_spend
         liq += net
-        rows.append({'Mese': month_names_it[m], 'Entrate': typ_income, 'Impegni': impegni,
-                     'Bollette': bollette, 'Variabile': variabile, 'Spese': spese,
-                     'Netto': net, 'Liquidità': liq})
+        rows.append({'Mese': month_names_it[m], 'Entrate': typ_income,
+                     'Spese': typ_spend, 'Netto': net, 'Liquidità': liq})
 
     if not rows:
         st.info("Nessun mese rimanente nell'anno.")
         return
 
-    st.caption("Impegni noti = ricorrenti/rate esatte · Bollette = stima dallo stesso mese dell'anno scorso · "
-               "Variabile = mediana mensile. La linea viola è la liquidità proiettata.")
     cal = pd.DataFrame(rows)
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Impegni'], name='Impegni noti', marker_color='#EF553B'))
-    fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Bollette'], name='Bollette stimate', marker_color='#FFA15A'))
-    fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Variabile'], name='Variabile stimato', marker_color='#636EFA'))
-    fig.add_trace(go.Scatter(x=cal['Mese'], y=cal['Entrate'], name='Entrate', mode='lines+markers',
-                             line=dict(color='#00CC96', width=2)))
+    fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Entrate'], name='Entrate tipiche',
+                         marker_color='#00CC96', opacity=0.7))
+    fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Spese'], name='Spese tipiche',
+                         marker_color='#EF553B', opacity=0.7))
     fig.add_trace(go.Scatter(x=cal['Mese'], y=cal['Liquidità'], name='Liquidità proiettata',
                              mode='lines+markers', line=dict(color='#7E57C2', width=2, dash='dot'), yaxis='y2'))
-    fig.update_layout(barmode='stack', height=430, yaxis=dict(title='€/mese'),
+    fig.update_layout(barmode='group', height=400, yaxis=dict(title='€/mese'),
                       yaxis2=dict(title='Liquidità €', overlaying='y', side='right', showgrid=False),
                       hovermode='x unified', legend=dict(orientation='h', yanchor='bottom', y=1.02))
     st.plotly_chart(fig, use_container_width=True)
 
     disp = cal.copy()
-    for c in ['Entrate', 'Impegni', 'Bollette', 'Variabile', 'Spese', 'Netto', 'Liquidità']:
+    for c in ['Entrate', 'Spese', 'Netto', 'Liquidità']:
         disp[c] = disp[c].apply(lambda x: f"€{x:,.0f}")
     st.dataframe(disp, use_container_width=True, hide_index=True)
 
-    neg = cal[cal['Liquidità'] < 0]
-    if not neg.empty:
-        st.error(f"⚠️ Liquidità proiettata sotto zero da **{neg.iloc[0]['Mese']}**: occhio ai mesi con impegni alti.")
-    peak = cal.loc[cal['Spese'].idxmax()]
-    st.caption(f"Mese più impegnativo: **{peak['Mese']}** (~€{peak['Spese']:,.0f} di spese).")
+    net_typ = typ_income - typ_spend
+    if net_typ >= 0:
+        st.success(f"In un mese tipico metti da parte ~€{net_typ:,.0f}. A dicembre la liquidità arriverebbe a ~€{cal.iloc[-1]['Liquidità']:,.0f}.")
+    else:
+        st.warning(f"In un mese tipico spendi ~€{abs(net_typ):,.0f} più di quanto entra. "
+                   f"A dicembre la liquidità scenderebbe a ~€{cal.iloc[-1]['Liquidità']:,.0f}.")
+
+    # Rate/impegni a termine in arrivo (solo riferimento sul TIMING; già dentro la spesa tipica)
+    if data_manager is not None:
+        try:
+            pr = data_manager.get_projected_recurring(date_type(cy, 12, 31))
+            rec_cfg = data_manager.get_recurring()
+            if not pr.empty and not rec_cfg.empty and 'remaining_installments' in rec_cfg.columns:
+                pr['date'] = pd.to_datetime(pr['date'])
+                rate_names = set(rec_cfg[rec_cfg['remaining_installments'].notna()]['name'])
+                fut = pr[(pr['date'].dt.date > today) & (pr['amount'] < 0) & (pr['name'].isin(rate_names))]
+                if not fut.empty:
+                    st.markdown("**📌 Rate a termine in arrivo** (per riferimento sul quando):")
+                    for _, r in fut.sort_values('date').iterrows():
+                        st.caption(f"· {r['date'].strftime('%d/%m')} — {r['name']} €{abs(r['amount']):,.0f}")
+        except Exception:
+            pass
