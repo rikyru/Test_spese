@@ -323,6 +323,102 @@ class DataManager:
             })
         return sorted(suggestions, key=lambda x: x['last'], reverse=True)
 
+    def get_recurring_candidates(self, min_months=4, max_cv=0.35):
+        """
+        Rileva spese inserite MANUALMENTE con cadenza regolare e importo stabile,
+        non ancora tra le ricorrenti e non ignorate: candidate a diventare ricorrenti.
+        Ritorna dict {key, source, frequency, amount, months, category, account}.
+        """
+        import statistics
+        from .utils import SUBSCRIPTION_TAGS
+        try:
+            rdf = self.con.execute("""
+                SELECT description, category, amount, date, tags, source_file
+                FROM transactions WHERE type = 'Expense'
+            """).df()
+        except Exception:
+            return []
+        if rdf.empty:
+            return []
+        rdf['date'] = pd.to_datetime(rdf['date'])
+        rdf = rdf[~rdf['source_file'].isin(['Recurring', 'reconcile', 'manual_transfer'])]
+        rdf = rdf[rdf['category'].astype('string').fillna('').str.lower() != 'trasferimento']
+        rdf['abs'] = rdf['amount'].abs()
+        if rdf.empty:
+            return []
+
+        rec = self.get_recurring()
+        rec_names = ' '.join(rec['name'].astype(str).str.lower().tolist()) if not rec.empty else ''
+        ignored = set(str(x).lower() for x in
+                      (self.rules_engine.rules.get('ignored_recurring_candidates', []) or []))
+        main_wallet = self.get_main_wallet() or 'Contanti'
+
+        def _freq(iv):
+            if iv <= 45: return 'Monthly'
+            if iv <= 75: return 'Bimonthly'
+            if iv <= 110: return 'Quarterly'
+            return 'Yearly'
+
+        def _analyze(g):
+            g = g.sort_values('date')
+            n_months = g['date'].dt.to_period('M').nunique()
+            if n_months < min_months:
+                return None
+            amts = g['abs']
+            if amts.mean() <= 0:
+                return None
+            cv = (amts.std() / amts.mean()) if len(amts) > 1 else 0
+            if cv > max_cv:
+                return None
+            dates = list(g['date'])
+            iv = statistics.median([(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]) if len(dates) > 1 else 999
+            if iv < 20 or iv > 420:
+                return None
+            cat_mode = g['category'].mode()
+            category = cat_mode.iloc[0] if not cat_mode.empty else 'Generale'
+            return {'frequency': _freq(iv), 'amount': round(float(amts.median()), 2),
+                    'months': int(n_months), 'category': category, 'account': main_wallet}
+
+        candidates, seen = [], set()
+        # 1) per descrizione (non vuota)
+        dfn = rdf[rdf['description'].astype('string').fillna('').str.strip() != '']
+        for desc, g in dfn.groupby('description'):
+            key = str(desc).strip()
+            kl = key.lower()
+            if not kl or kl in ignored or kl in seen or kl in rec_names:
+                continue
+            a = _analyze(g)
+            if a:
+                a.update(key=key, source='descrizione', tag=None)
+                candidates.append(a)
+                seen.add(kl)
+        # 2) per tag (mensili; esclusi i servizi già gestiti dai suggerimenti abbonamenti)
+        ex = rdf.explode('tags')
+        ex['tags'] = ex['tags'].astype(str)
+        ex = ex[~ex['tags'].isin(['nan', 'None', ''])]
+        for tag, g in ex.groupby('tags'):
+            kl = str(tag).lower()
+            if kl in ignored or kl in seen or kl in rec_names:
+                continue
+            if kl in {'recurring', 'initial', 'adjustment'} or kl in SUBSCRIPTION_TAGS:
+                continue
+            a = _analyze(g)
+            if a and a['frequency'] == 'Monthly':
+                a.update(key=str(tag), source='tag', tag=str(tag))
+                candidates.append(a)
+                seen.add(kl)
+        return sorted(candidates, key=lambda x: -x['months'])[:15]
+
+    def ignore_recurring_candidate(self, key):
+        """Marca un candidato ricorrente come 'da non suggerire più'."""
+        rules = self.rules_engine.rules
+        lst = rules.get('ignored_recurring_candidates', []) or []
+        if key not in lst:
+            lst.append(key)
+        rules['ignored_recurring_candidates'] = lst
+        self.rules_engine.save_rules(rules)
+        return True
+
     def ignore_subscription_suggestion(self, tag):
         """Marca un tag come 'da non suggerire più' (persistito in rules.yaml)."""
         rules = self.rules_engine.rules

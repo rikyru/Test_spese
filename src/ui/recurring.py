@@ -113,6 +113,34 @@ def render_recurring(data_manager: DataManager):
                 st.rerun()
         st.divider()
 
+    # --- Suggeritore: spese ricorrenti segnate a mano ---
+    candidates = data_manager.get_recurring_candidates()
+    if candidates:
+        st.subheader("💡 Forse è una spesa ricorrente")
+        st.caption("Spese che inserisci a mano con cadenza regolare e importo stabile. "
+                   "Mettendole tra le ricorrenti eviti di riscriverle e rendi precise proiezione e calendario.")
+        _fl = {'Monthly': 'mese', 'Bimonthly': 'bimestre', 'Quarterly': 'trimestre', 'Yearly': 'anno'}
+        for cnd in candidates:
+            k = cnd['key']
+            r1, r2, r3, r4 = st.columns([3, 3, 1, 1])
+            r1.markdown(f"**{k.title()}** — €{cnd['amount']:,.2f}/{_fl.get(cnd['frequency'], 'mese')}")
+            r2.caption(f"{cnd['frequency']} · {cnd['months']} mesi · {cnd['source']} · cat. {cnd['category']}")
+            if r3.button("➕ Aggiungi", key=f"cand_add_{cnd['source']}_{k}", use_container_width=True):
+                from datetime import date
+                tags = [cnd['tag']] if cnd.get('tag') else []
+                data_manager.add_recurring(
+                    name=k.title(), amount=-abs(cnd['amount']), category=cnd['category'],
+                    account=cnd['account'], frequency=cnd['frequency'], start_date=date.today(),
+                    description=k.title(), tags=tags,
+                )
+                st.success(f"'{k.title()}' aggiunto alle ricorrenti ({cnd['frequency']}, €{cnd['amount']:,.2f}).")
+                st.rerun()
+            if r4.button("🙈 Ignora", key=f"cand_ign_{cnd['source']}_{k}", use_container_width=True):
+                data_manager.ignore_recurring_candidate(k)
+                st.toast(f"'{k}' ignorato.")
+                st.rerun()
+        st.divider()
+
     # --- Add New Recurring ---
     st.subheader("➕ Add New Template")
     
