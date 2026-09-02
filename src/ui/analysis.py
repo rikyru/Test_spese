@@ -1035,32 +1035,39 @@ def render_year_scenario(full_df, data_manager=None):
     remaining_months = 12 - today.month  # mesi interi rimanenti dopo questo mese
 
     ytd_inc_df = real_income(ytd)
-    ytd_exp_df = real_expenses(ytd)
+    ytd_exp_df = real_expenses(ytd).copy()
+    ytd_exp_df['abs'] = ytd_exp_df['amount'].abs()
+    ytd_exp_df['period'] = ytd_exp_df['date'].dt.to_period('M')
     ytd_income = ytd_inc_df['amount'].sum()
-    ytd_expenses_total = ytd_exp_df['amount'].abs().sum()
+    ytd_expenses_total = ytd_exp_df['abs'].sum()
 
-    # Ricorrenti già generate quest'anno (source_file='Recurring'): le separo dal
-    # variabile per non contarle due volte quando aggiungo le rate future.
-    if 'source_file' in ytd_exp_df.columns:
-        ytd_recurring = ytd_exp_df[ytd_exp_df['source_file'] == 'Recurring']['amount'].abs().sum()
-    else:
-        ytd_recurring = 0.0
-    ytd_variable = max(ytd_expenses_total - ytd_recurring, 0.0)
+    # Valori "tipici" per necessità = MEDIANA dei mesi COMPLETI (mese in corso escluso),
+    # robusta ai mesi anomali. Servono a proiettare Need/Want e capire dove tagliare.
+    ip = in_progress_period(df)
 
-    avg_income = ytd_income / months_elapsed
-    avg_variable = ytd_variable / months_elapsed
+    def _typical(mask_series):
+        s = ytd_exp_df[mask_series].groupby('period')['abs'].sum()
+        if ip is not None and ip in s.index:
+            s = s.drop(ip)
+        return float(s.median()) if not s.empty else 0.0
 
-    # Frazione rimanente del mese corrente
+    typ_need = _typical(ytd_exp_df['necessity'] == 'Need')
+    typ_want = _typical(ytd_exp_df['necessity'] == 'Want')
+    typ_other = _typical(~ytd_exp_df['necessity'].isin(['Need', 'Want']))
+
+    inc_series = ytd_inc_df.assign(period=ytd_inc_df['date'].dt.to_period('M')).groupby('period')['amount'].sum()
+    if ip is not None and ip in inc_series.index:
+        inc_series = inc_series.drop(ip)
+    typ_income = float(inc_series.median()) if not inc_series.empty else (ytd_income / months_elapsed)
+
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     month_fraction_remaining = (days_in_month - today.day) / days_in_month
     proj_months = remaining_months + month_fraction_remaining
 
-    # Ricorrenti / rate ancora da pagare entro fine anno
-    # (get_projected_recurring rispetta rate residue e date di fine)
+    # Ricorrenti/rate ancora da pagare entro dicembre (informativo: già dentro i valori tipici)
     end_of_year = date_type(current_year, 12, 31)
     remaining_recurring = 0.0
     remaining_installments_amt = 0.0
-    rec_by_month = {}
     if data_manager is not None:
         try:
             proj_rec = data_manager.get_projected_recurring(end_of_year)
@@ -1071,7 +1078,6 @@ def render_year_scenario(full_df, data_manager=None):
                 if not fut.empty:
                     fut['abs'] = fut['amount'].abs()
                     remaining_recurring = fut['abs'].sum()
-                    rec_by_month = fut.groupby(fut['date'].dt.month)['abs'].sum().to_dict()
                     rec_cfg = data_manager.get_recurring()
                     if not rec_cfg.empty and 'remaining_installments' in rec_cfg.columns:
                         rate_names = set(rec_cfg[rec_cfg['remaining_installments'].notna()]['name'])
@@ -1079,25 +1085,43 @@ def render_year_scenario(full_df, data_manager=None):
         except Exception:
             pass
 
-    proj_income = avg_income * proj_months
-    proj_variable = avg_variable * proj_months
-    proj_expenses = proj_variable + remaining_recurring
+    proj_income = typ_income * proj_months
+    proj_needs = typ_need * proj_months
+    proj_wants = typ_want * proj_months
+    proj_other = typ_other * proj_months
+    proj_expenses = proj_needs + proj_wants + proj_other
 
     ytd_net = ytd_income - ytd_expenses_total
     fy_net_base = ytd_net + proj_income - proj_expenses
 
-    st.caption(f"Basato su {months_elapsed} mesi YTD ({current_year}). Entrate proiettate = media mensile; "
-               f"spese = media variabile ({int(month_fraction_remaining*100)}% del mese corrente + "
-               f"{remaining_months} mesi) + ricorrenti/rate ancora in scadenza.")
+    st.caption(f"Valori 'tipici' = mediana dei mesi completi del {current_year} (mese in corso escluso). "
+               f"Proiezione sui restanti {proj_months:.1f} mesi.")
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Entrata Media/Mese", f"€{avg_income:,.0f}", help="Media mensile entrate YTD")
-    col2.metric("Spesa Variabile/Mese", f"€{avg_variable:,.0f}",
-                help="Media mensile escludendo le ricorrenti già pagate")
-    col3.metric("Ricorrenti da qui a dic.", f"€{remaining_recurring:,.0f}",
-                help="Rate e spese fisse ancora da pagare entro fine anno")
-    col4.metric("↳ di cui Rate", f"€{remaining_installments_amt:,.0f}",
-                help="Quota di ricorrenti con numero di rate limitato")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Entrata Tipica/Mese", f"€{typ_income:,.0f}")
+    m2.metric("Need Tipico/Mese", f"€{typ_need:,.0f}", help="Spese necessarie tipiche (difficili da tagliare)")
+    m3.metric("Want Tipico/Mese", f"€{typ_want:,.0f}", help="Spese voluttuarie: è qui che puoi tagliare")
+    m4.metric("Risparmio Tipico/Mese", f"€{typ_income - typ_need - typ_want - typ_other:,.0f}")
+
+    if remaining_recurring > 0:
+        _rate_txt = f" (di cui rate a termine €{remaining_installments_amt:,.0f})" if remaining_installments_amt > 0 else ""
+        st.caption(f"ℹ️ Ricorrenti/rate ancora da pagare entro dicembre: €{remaining_recurring:,.0f}{_rate_txt} — "
+                   "già incluse nei valori tipici qui sopra.")
+
+    # --- Dove puoi tagliare: Needs vs Wants proiettati ---
+    st.divider()
+    st.markdown("### ✂️ Dove puoi tagliare (resto dell'anno)")
+    st.caption("I Needs sono poco comprimibili; i Wants sono la leva su cui agire.")
+    t1, t2, t3 = st.columns(3)
+    t1.metric("Needs proiettati", f"€{proj_needs:,.0f}")
+    t2.metric("Wants proiettati", f"€{proj_wants:,.0f}")
+    tot_proj = proj_needs + proj_wants + proj_other
+    t3.metric("Quota Wants", f"{(proj_wants / tot_proj * 100) if tot_proj else 0:.0f}%",
+              help="Percentuale delle spese proiettate che è voluttuaria")
+    cut = st.slider("Simula un taglio dei Wants", 0, 100, 20, step=5, format="%d%%", key="wants_cut")
+    saved = proj_wants * cut / 100.0
+    st.success(f"Tagliando il **{cut}%** dei Wants risparmi **€{saved:,.0f}** in più entro fine anno "
+               f"→ risparmio stimato **€{fy_net_base + saved:,.0f}** (baseline €{fy_net_base:,.0f}).")
 
     st.divider()
 
@@ -1162,7 +1186,8 @@ def render_year_scenario(full_df, data_manager=None):
         col1, col2, col3 = st.columns(3)
         col1.metric("Entrate Proiettate (resto anno)", f"€{proj_income:,.0f}")
         col2.metric("Spese Proiettate (resto anno)", f"€{proj_expenses:,.0f}",
-                    help="Variabile media + ricorrenti/rate residue")
+                    help=f"Need €{proj_needs:,.0f} + Want €{proj_wants:,.0f}"
+                         + (f" + Altro €{proj_other:,.0f}" if proj_other else ""))
         col3.metric("Risparmio Stimato Fine Anno", f"€{fy_net_base:,.0f}",
                     delta_color="normal")
         if fy_net_base > 0:
@@ -1195,8 +1220,8 @@ def render_year_scenario(full_df, data_manager=None):
     for m in range(today.month + 1, 13):
         extra = extra_by_month.get(m, 0)
         chart_rows.append({'mese': month_names_it[m], 'num': m,
-                           'entrate': avg_income,
-                           'spese': avg_variable + rec_by_month.get(m, 0) + extra,
+                           'entrate': typ_income,
+                           'spese': typ_need + typ_want + typ_other + extra,
                            'tipo': 'Proiezione' if extra == 0 else 'Proiezione + Extra'})
 
     chart_df = pd.DataFrame(chart_rows)
