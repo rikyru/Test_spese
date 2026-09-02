@@ -76,6 +76,25 @@ class DataManager:
         except Exception:
             return []
 
+    def add_planned(self, name, amount, due_date, category=None):
+        """Aggiunge una spesa in programma (una-tantum nota)."""
+        self.con.execute(
+            "INSERT INTO planned_expenses (id, name, amount, due_date, category) VALUES (uuid(), ?, ?, ?, ?)",
+            [name, abs(float(amount)), due_date, category]
+        )
+        return True
+
+    def get_planned(self):
+        """Ritorna le spese in programma ordinate per data."""
+        try:
+            return self.con.execute("SELECT * FROM planned_expenses ORDER BY due_date").df()
+        except Exception:
+            return pd.DataFrame(columns=['id', 'name', 'amount', 'due_date', 'category'])
+
+    def delete_planned(self, pid):
+        self.con.execute("DELETE FROM planned_expenses WHERE id = ?", [pid])
+        return True
+
     def add_transfer(self, from_account, to_account, amount, date, description=''):
         """
         Registra un trasferimento tra due portafogli come coppia
@@ -137,7 +156,19 @@ class DataManager:
                 end_date DATE
             )
         """)
-        
+
+        # Spese in programma (una-tantum note: condominio residuo, revisione caldaia, ecc.)
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS planned_expenses (
+                id VARCHAR DEFAULT uuid(),
+                name VARCHAR,
+                amount DOUBLE,
+                due_date DATE,
+                category VARCHAR,
+                created_at TIMESTAMP DEFAULT now()
+            )
+        """)
+
         # Migration: Ensure necessity/id column exists (for existing DBs)
         try:
             columns = self.con.execute("PRAGMA table_info(transactions)").fetchall()

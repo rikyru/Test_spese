@@ -1130,76 +1130,68 @@ def render_year_scenario(full_df, data_manager=None):
 
     st.divider()
 
-    # Scenario builder
-    st.markdown("### ➕ Aggiungi Spese Straordinarie")
-    st.caption("Simula spese una-tantum per vedere l'impatto a fine anno (es. vacanze, regalo matrimonio, acquisto device...)")
+    # 📋 Spese in programma (PERSISTENTI): voci una-tantum note da contare a fine anno
+    st.markdown("### 📋 Spese in programma")
+    st.caption("Spese future che sai già di dover sostenere (es. condominio residuo €650, revisione caldaia, "
+               "bollo auto...). Restano salvate e vengono contate nella proiezione di fine anno e nel calendario liquidità.")
 
-    if 'year_scenarios' not in st.session_state:
-        st.session_state['year_scenarios'] = []
+    planned = data_manager.get_planned() if data_manager is not None else pd.DataFrame()
 
-    future_months = [pd.Timestamp(current_year, m, 1).strftime('%B %Y')
-                     for m in range(today.month, 13)]
-    future_month_nums = list(range(today.month, 13))
-
-    with st.form("scenario_add_form", clear_on_submit=True):
-        col_a, col_b, col_c = st.columns([3, 2, 2])
-        sc_name = col_a.text_input("Descrizione", placeholder="es. Regalo matrimonio")
-        sc_amount = col_b.number_input("Importo €", min_value=0.0, step=10.0)
-        sc_month_label = col_c.selectbox("Mese", future_months)
-        if st.form_submit_button("➕ Aggiungi", use_container_width=False):
-            if sc_name and sc_amount > 0:
-                sc_month_num = future_month_nums[future_months.index(sc_month_label)]
-                st.session_state['year_scenarios'].append({
-                    'nome': sc_name,
-                    'importo': sc_amount,
-                    'mese': sc_month_num,
-                    'mese_label': sc_month_label
-                })
+    with st.form("planned_add_form", clear_on_submit=True):
+        pc1, pc2, pc3 = st.columns([3, 2, 2])
+        pl_name = pc1.text_input("Descrizione", placeholder="es. Condominio residuo")
+        pl_amount = pc2.number_input("Importo €", min_value=0.0, step=10.0)
+        pl_date = pc3.date_input("Entro il", value=date_type(current_year, 12, 31),
+                                 min_value=today, max_value=date_type(current_year, 12, 31))
+        if st.form_submit_button("➕ Aggiungi in programma") and data_manager is not None:
+            if pl_name and pl_amount > 0:
+                data_manager.add_planned(pl_name, pl_amount, pl_date)
                 st.rerun()
 
-    if st.session_state['year_scenarios']:
-        st.markdown("**Spese aggiunte:**")
-        for i, sc in enumerate(st.session_state['year_scenarios']):
-            col_x, col_y = st.columns([5, 1])
-            col_x.markdown(f"- **{sc['nome']}** — €{sc['importo']:,.0f} ({sc['mese_label']})")
-            if col_y.button("🗑️", key=f"del_sc_{i}"):
-                st.session_state['year_scenarios'].pop(i)
+    total_planned = 0.0
+    planned_by_month = {}
+    if planned is not None and not planned.empty:
+        planned = planned.copy()
+        planned['due_date'] = pd.to_datetime(planned['due_date'])
+        for _, p in planned.iterrows():
+            pr1, pr2, pr3, pr4 = st.columns([4, 2, 2, 1])
+            pr1.markdown(f"**{p['name']}**")
+            pr2.markdown(f"€{abs(p['amount']):,.0f}")
+            pr3.caption(p['due_date'].strftime('%d/%m/%Y'))
+            if pr4.button("🗑️", key=f"del_pl_{p['id']}"):
+                data_manager.delete_planned(p['id'])
                 st.rerun()
-
-        total_extra = sum(sc['importo'] for sc in st.session_state['year_scenarios'])
-        fy_net_scenario = fy_net_base - total_extra
-
-        st.divider()
-        st.markdown("### 📊 Risultato Simulazione")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Risparmio Fine Anno (Baseline)", f"€{fy_net_base:,.0f}",
-                    delta_color="normal")
-        col2.metric("Spese Extra Totali", f"€{total_extra:,.0f}",
-                    delta=f"-€{total_extra:,.0f}", delta_color="inverse")
-        col3.metric("Risparmio Fine Anno (Scenario)", f"€{fy_net_scenario:,.0f}",
-                    delta=f"€{fy_net_scenario - fy_net_base:,.0f}", delta_color="normal")
-
-        if fy_net_scenario < 0:
-            st.error(f"⚠️ Con queste spese extra andresti in rosso di €{abs(fy_net_scenario):,.0f} a fine anno.")
-        elif fy_net_scenario < fy_net_base * 0.5:
-            st.warning(f"📉 Le spese extra dimezzano quasi il risparmio previsto.")
-        else:
-            st.success(f"✅ Puoi permetterti queste spese mantenendo un risparmio di €{fy_net_scenario:,.0f}.")
+        pmask = (planned['due_date'].dt.date > today) & (planned['due_date'].dt.year == current_year)
+        planned_future = planned[pmask]
+        total_planned = planned_future['amount'].abs().sum()
+        planned_by_month = (planned_future.assign(m=planned_future['due_date'].dt.month)
+                            .groupby('m')['amount'].apply(lambda s: s.abs().sum()).to_dict())
     else:
-        st.divider()
-        st.markdown("### 📊 Proiezione Baseline")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Entrate Proiettate (resto anno)", f"€{proj_income:,.0f}")
-        col2.metric("Spese Proiettate (resto anno)", f"€{proj_expenses:,.0f}",
-                    help=f"Variabile €{proj_variable:,.0f} (Need €{proj_needs:,.0f} + Want €{proj_wants:,.0f}"
-                         + (f" + Altro €{proj_other:,.0f}" if proj_other else "")
-                         + f") + Impegni noti €{proj_committed:,.0f}")
-        col3.metric("Risparmio Stimato Fine Anno", f"€{fy_net_base:,.0f}",
-                    delta_color="normal")
-        if fy_net_base > 0:
-            st.success(f"🎯 A questo ritmo finirai l'anno con un risparmio netto di **€{fy_net_base:,.0f}**.")
-        else:
-            st.error(f"⚠️ A questo ritmo finirai l'anno con un deficit di **€{abs(fy_net_base):,.0f}**.")
+        st.caption("Nessuna spesa in programma: aggiungine una qui sopra.")
+
+    fy_net_scenario = fy_net_base - total_planned
+
+    st.divider()
+    st.markdown("### 📊 Proiezione Fine Anno")
+    st.caption(f"Proiezione resto anno: entrate ~€{proj_income:,.0f} · spese ~€{proj_expenses:,.0f} "
+               f"(variabile €{proj_variable:,.0f} + impegni noti €{proj_committed:,.0f}).")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Risparmio Baseline", f"€{fy_net_base:,.0f}", help="Senza le spese in programma")
+    col2.metric("Spese in Programma", f"€{total_planned:,.0f}",
+                delta=(f"-€{total_planned:,.0f}" if total_planned else None), delta_color="inverse")
+    col3.metric("Risparmio Fine Anno", f"€{fy_net_scenario:,.0f}",
+                delta=(f"€{fy_net_scenario - fy_net_base:,.0f}" if total_planned else None),
+                delta_color="normal")
+
+    if fy_net_scenario < 0:
+        st.error(f"⚠️ Con le spese in programma finiresti l'anno in rosso di €{abs(fy_net_scenario):,.0f}.")
+    elif total_planned > 0 and fy_net_base > 0 and fy_net_scenario < fy_net_base * 0.5:
+        st.warning("📉 Le spese in programma dimezzano quasi il risparmio previsto.")
+    elif fy_net_scenario >= 0:
+        st.success(f"✅ Risparmio netto stimato a fine anno: **€{fy_net_scenario:,.0f}**"
+                   + (f" (dopo €{total_planned:,.0f} di spese in programma)." if total_planned else "."))
+    else:
+        st.error(f"⚠️ A questo ritmo finiresti l'anno con un deficit di €{abs(fy_net_scenario):,.0f}.")
 
     # Chart mensile proiezione
     st.divider()
@@ -1218,10 +1210,8 @@ def render_year_scenario(full_df, data_manager=None):
                            'entrate': inc, 'spese': exp,
                            'tipo': 'Storico'})
 
-    # Mesi futuri (proiezione)
-    extra_by_month = {}
-    for sc in st.session_state.get('year_scenarios', []):
-        extra_by_month[sc['mese']] = extra_by_month.get(sc['mese'], 0) + sc['importo']
+    # Mesi futuri (proiezione) — extra = spese in programma di quel mese
+    extra_by_month = planned_by_month
 
     for m in range(today.month + 1, 13):
         extra = extra_by_month.get(m, 0)
@@ -2066,27 +2056,47 @@ def render_commitments_calendar(full_df, data_manager):
                "(la spesa include già tutto ciò che registri — mutuo, bollette, spesa...). "
                "Serve a vedere la traiettoria della liquidità, non il singolo movimento.")
 
+    # Spese in programma (una-tantum note) per mese — queste sono FUTURE, non nello
+    # storico, quindi vanno aggiunte (nessun doppio conteggio).
+    planned_by_month = {}
+    try:
+        pl = data_manager.get_planned() if data_manager is not None else pd.DataFrame()
+        if pl is not None and not pl.empty:
+            pl = pl.copy()
+            pl['due_date'] = pd.to_datetime(pl['due_date'])
+            plf = pl[(pl['due_date'].dt.date > today) & (pl['due_date'].dt.year == cy)]
+            planned_by_month = (plf.assign(m=plf['due_date'].dt.month)
+                                .groupby('m')['amount'].apply(lambda s: s.abs().sum()).to_dict())
+    except Exception:
+        pass
+
     month_names_it = {1:'Gen', 2:'Feb', 3:'Mar', 4:'Apr', 5:'Mag', 6:'Giu',
                       7:'Lug', 8:'Ago', 9:'Set', 10:'Ott', 11:'Nov', 12:'Dic'}
 
     rows = []
     liq = net_worth
     for m in range(today.month + 1, 13):
-        net = typ_income - typ_spend
+        programmate = float(planned_by_month.get(m, 0.0))
+        spese_m = typ_spend + programmate
+        net = typ_income - spese_m
         liq += net
-        rows.append({'Mese': month_names_it[m], 'Entrate': typ_income,
-                     'Spese': typ_spend, 'Netto': net, 'Liquidità': liq})
+        rows.append({'Mese': month_names_it[m], 'Entrate': typ_income, 'Spese tipiche': typ_spend,
+                     'In programma': programmate, 'Spese': spese_m, 'Netto': net, 'Liquidità': liq})
 
     if not rows:
         st.info("Nessun mese rimanente nell'anno.")
         return
 
     cal = pd.DataFrame(rows)
+    has_planned = cal['In programma'].sum() > 0
     fig = go.Figure()
     fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Entrate'], name='Entrate tipiche',
                          marker_color='#00CC96', opacity=0.7))
-    fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Spese'], name='Spese tipiche',
+    fig.add_trace(go.Bar(x=cal['Mese'], y=cal['Spese tipiche'], name='Spese tipiche',
                          marker_color='#EF553B', opacity=0.7))
+    if has_planned:
+        fig.add_trace(go.Bar(x=cal['Mese'], y=cal['In programma'], name='In programma',
+                             marker_color='#FFA15A'))
     fig.add_trace(go.Scatter(x=cal['Mese'], y=cal['Liquidità'], name='Liquidità proiettata',
                              mode='lines+markers', line=dict(color='#7E57C2', width=2, dash='dot'), yaxis='y2'))
     fig.update_layout(barmode='group', height=400, yaxis=dict(title='€/mese'),
@@ -2094,8 +2104,9 @@ def render_commitments_calendar(full_df, data_manager):
                       hovermode='x unified', legend=dict(orientation='h', yanchor='bottom', y=1.02))
     st.plotly_chart(fig, use_container_width=True)
 
-    disp = cal.copy()
-    for c in ['Entrate', 'Spese', 'Netto', 'Liquidità']:
+    cols_show = ['Mese', 'Entrate', 'Spese tipiche'] + (['In programma'] if has_planned else []) + ['Netto', 'Liquidità']
+    disp = cal[cols_show].copy()
+    for c in [c for c in cols_show if c != 'Mese']:
         disp[c] = disp[c].apply(lambda x: f"€{x:,.0f}")
     st.dataframe(disp, use_container_width=True, hide_index=True)
 
