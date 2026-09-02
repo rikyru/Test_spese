@@ -114,7 +114,7 @@ def render_analysis(data_manager: DataManager):
     elif view == views[3]:
         render_needs_vs_wants(df, filtered_df)
     elif view == views[4]:
-        render_forecasting(filtered_df, df)
+        render_forecasting(filtered_df, df, data_manager)
     elif view == views[5]:
         render_yoy_comparison(df)
     elif view == views[6]:
@@ -191,25 +191,49 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     all_monthly_totals = all_expenses.groupby('month_year')['abs_amount'].sum().sort_index()
 
     if len(all_monthly_totals) >= 2:
-        # Use explicit last 2 periods from sorted index (not iloc on filtered data)
         curr_period = all_monthly_totals.index[-1]
         prev_period = all_monthly_totals.index[-2]
-        curr_total = all_monthly_totals[curr_period]
-        prev_total = all_monthly_totals[prev_period]
-        diff = curr_total - prev_total
-        pct = (diff / prev_total) * 100 if prev_total > 0 else 0
+        curr_rows = all_expenses[all_expenses['month_year'] == curr_period]
+        prev_rows = all_expenses[all_expenses['month_year'] == prev_period]
 
-        if diff > 0:
-            st.warning(f"📈 Hai speso **€{abs(diff):,.2f} in più** rispetto a {prev_period} (+{pct:.1f}%)")
+        cutoff_day = int(curr_rows['date'].dt.day.max())
+        days_curr = calendar.monthrange(curr_period.year, curr_period.month)[1]
+        is_partial = cutoff_day < days_curr
+
+        curr_total = curr_rows['abs_amount'].sum()
+        prev_full = prev_rows['abs_amount'].sum()
+
+        if is_partial:
+            # Confronto EQUO: stesso intervallo di giorni (1 → cutoff_day)
+            prev_same = prev_rows[prev_rows['date'].dt.day <= cutoff_day]['abs_amount'].sum()
+            diff = curr_total - prev_same
+            pct = (diff / prev_same * 100) if prev_same > 0 else 0
+            if diff > 0:
+                st.warning(f"📈 Dal 1 al {cutoff_day} hai speso **€{abs(diff):,.2f} in più** "
+                           f"rispetto allo stesso periodo di {prev_period} (+{pct:.1f}%)")
+            else:
+                st.success(f"📉 Dal 1 al {cutoff_day} hai speso **€{abs(diff):,.2f} in meno** "
+                           f"rispetto allo stesso periodo di {prev_period} ({pct:.1f}%)")
+            proj_full = curr_total / cutoff_day * days_curr if cutoff_day else curr_total
+            st.caption(f"Proiezione fine mese ~€{proj_full:,.0f}  ·  {prev_period} intero: €{prev_full:,.0f}")
+            comp_data = pd.DataFrame({
+                'Periodo': [f"{prev_period} (1–{cutoff_day})", f"{curr_period} (1–{cutoff_day})"],
+                'Spese': [prev_same, curr_total],
+            })
         else:
-            st.success(f"📉 Hai speso **€{abs(diff):,.2f} in meno** rispetto a {prev_period} ({pct:.1f}%)")
+            diff = curr_total - prev_full
+            pct = (diff / prev_full * 100) if prev_full > 0 else 0
+            if diff > 0:
+                st.warning(f"📈 Hai speso **€{abs(diff):,.2f} in più** rispetto a {prev_period} (+{pct:.1f}%)")
+            else:
+                st.success(f"📉 Hai speso **€{abs(diff):,.2f} in meno** rispetto a {prev_period} ({pct:.1f}%)")
+            comp_data = pd.DataFrame({
+                'Periodo': [str(prev_period), str(curr_period)],
+                'Spese': [prev_full, curr_total],
+            })
 
-        comp_data = pd.DataFrame({
-            'Mese': [str(prev_period), str(curr_period)],
-            'Spese': [prev_total, curr_total]
-        })
         colors = ['#636EFA', '#EF553B' if diff > 0 else '#00CC96']
-        fig_comp = px.bar(comp_data, x='Mese', y='Spese', color='Mese',
+        fig_comp = px.bar(comp_data, x='Periodo', y='Spese', color='Periodo',
                           color_discrete_sequence=colors, text_auto='.2s')
         fig_comp.update_layout(showlegend=False, height=300)
         st.plotly_chart(fig_comp, use_container_width=True)
@@ -745,7 +769,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
 # FORECASTING
 # ---------------------------------------------------------------------------
 
-def render_forecasting(df, full_df=None):
+def render_forecasting(df, full_df=None, data_manager=None):
     st.subheader("📈 Forecasting")
 
     df = df.copy()
@@ -903,14 +927,14 @@ def render_forecasting(df, full_df=None):
 
     # --- Scenario Fine Anno ---
     if full_df is not None:
-        render_year_scenario(full_df)
+        render_year_scenario(full_df, data_manager)
 
 
 # ---------------------------------------------------------------------------
 # SCENARIO FINE ANNO
 # ---------------------------------------------------------------------------
 
-def render_year_scenario(full_df):
+def render_year_scenario(full_df, data_manager=None):
     from datetime import date as date_type
     st.divider()
     st.subheader("🎯 Scenario Fine Anno")
@@ -933,36 +957,67 @@ def render_year_scenario(full_df):
     ytd_inc_df = real_income(ytd)
     ytd_exp_df = real_expenses(ytd)
     ytd_income = ytd_inc_df['amount'].sum()
-    ytd_needs = ytd_exp_df[ytd_exp_df['necessity'] == 'Need']['amount'].abs().sum()
-    ytd_wants = ytd_exp_df[ytd_exp_df['necessity'] == 'Want']['amount'].abs().sum()
-    ytd_other_exp = ytd_exp_df[~ytd_exp_df['necessity'].isin(['Need', 'Want'])]['amount'].abs().sum()
+    ytd_expenses_total = ytd_exp_df['amount'].abs().sum()
+
+    # Ricorrenti già generate quest'anno (source_file='Recurring'): le separo dal
+    # variabile per non contarle due volte quando aggiungo le rate future.
+    if 'source_file' in ytd_exp_df.columns:
+        ytd_recurring = ytd_exp_df[ytd_exp_df['source_file'] == 'Recurring']['amount'].abs().sum()
+    else:
+        ytd_recurring = 0.0
+    ytd_variable = max(ytd_expenses_total - ytd_recurring, 0.0)
 
     avg_income = ytd_income / months_elapsed
-    avg_needs = ytd_needs / months_elapsed
-    avg_wants = ytd_wants / months_elapsed
+    avg_variable = ytd_variable / months_elapsed
 
-    # Quanto manca nel mese corrente (frazione del mese rimanente)
-    days_in_month = (pd.Timestamp(today.year, today.month, 1) + pd.DateOffset(months=1) - pd.Timestamp(today.year, today.month, 1)).days
-    days_elapsed_this_month = today.day
-    month_fraction_remaining = (days_in_month - days_elapsed_this_month) / days_in_month
-
-    # Proiezione: mesi rimanenti completi + resto del mese corrente
+    # Frazione rimanente del mese corrente
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    month_fraction_remaining = (days_in_month - today.day) / days_in_month
     proj_months = remaining_months + month_fraction_remaining
 
+    # Ricorrenti / rate ancora da pagare entro fine anno
+    # (get_projected_recurring rispetta rate residue e date di fine)
+    end_of_year = date_type(current_year, 12, 31)
+    remaining_recurring = 0.0
+    remaining_installments_amt = 0.0
+    rec_by_month = {}
+    if data_manager is not None:
+        try:
+            proj_rec = data_manager.get_projected_recurring(end_of_year)
+            if not proj_rec.empty:
+                proj_rec = proj_rec.copy()
+                proj_rec['date'] = pd.to_datetime(proj_rec['date'])
+                fut = proj_rec[(proj_rec['date'].dt.date > today) & (proj_rec['amount'] < 0)].copy()
+                if not fut.empty:
+                    fut['abs'] = fut['amount'].abs()
+                    remaining_recurring = fut['abs'].sum()
+                    rec_by_month = fut.groupby(fut['date'].dt.month)['abs'].sum().to_dict()
+                    rec_cfg = data_manager.get_recurring()
+                    if not rec_cfg.empty and 'remaining_installments' in rec_cfg.columns:
+                        rate_names = set(rec_cfg[rec_cfg['remaining_installments'].notna()]['name'])
+                        remaining_installments_amt = fut[fut['name'].isin(rate_names)]['abs'].sum()
+        except Exception:
+            pass
+
     proj_income = avg_income * proj_months
-    proj_needs = avg_needs * proj_months
-    proj_wants_base = avg_wants * proj_months
+    proj_variable = avg_variable * proj_months
+    proj_expenses = proj_variable + remaining_recurring
 
-    ytd_net = ytd_income - ytd_needs - ytd_wants - ytd_other_exp
-    proj_net_base = proj_income - proj_needs - proj_wants_base
-    fy_net_base = ytd_net + proj_net_base
+    ytd_net = ytd_income - ytd_expenses_total
+    fy_net_base = ytd_net + proj_income - proj_expenses
 
-    st.caption(f"Basato su {months_elapsed} mesi di dati YTD ({current_year}). Proiezione per i restanti {remaining_months} mesi completi + {int(month_fraction_remaining * 100)}% del mese corrente.")
+    st.caption(f"Basato su {months_elapsed} mesi YTD ({current_year}). Entrate proiettate = media mensile; "
+               f"spese = media variabile ({int(month_fraction_remaining*100)}% del mese corrente + "
+               f"{remaining_months} mesi) + ricorrenti/rate ancora in scadenza.")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Entrata Media/Mese (YTD)", f"€{avg_income:,.0f}")
-    col2.metric("Need Media/Mese (YTD)", f"€{avg_needs:,.0f}")
-    col3.metric("Want Media/Mese (YTD)", f"€{avg_wants:,.0f}")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Entrata Media/Mese", f"€{avg_income:,.0f}", help="Media mensile entrate YTD")
+    col2.metric("Spesa Variabile/Mese", f"€{avg_variable:,.0f}",
+                help="Media mensile escludendo le ricorrenti già pagate")
+    col3.metric("Ricorrenti da qui a dic.", f"€{remaining_recurring:,.0f}",
+                help="Rate e spese fisse ancora da pagare entro fine anno")
+    col4.metric("↳ di cui Rate", f"€{remaining_installments_amt:,.0f}",
+                help="Quota di ricorrenti con numero di rate limitato")
 
     st.divider()
 
@@ -1026,7 +1081,8 @@ def render_year_scenario(full_df):
         st.markdown("### 📊 Proiezione Baseline")
         col1, col2, col3 = st.columns(3)
         col1.metric("Entrate Proiettate (resto anno)", f"€{proj_income:,.0f}")
-        col2.metric("Spese Proiettate (resto anno)", f"€{proj_needs + proj_wants_base:,.0f}")
+        col2.metric("Spese Proiettate (resto anno)", f"€{proj_expenses:,.0f}",
+                    help="Variabile media + ricorrenti/rate residue")
         col3.metric("Risparmio Stimato Fine Anno", f"€{fy_net_base:,.0f}",
                     delta_color="normal")
         if fy_net_base > 0:
@@ -1060,7 +1116,7 @@ def render_year_scenario(full_df):
         extra = extra_by_month.get(m, 0)
         chart_rows.append({'mese': month_names_it[m], 'num': m,
                            'entrate': avg_income,
-                           'spese': avg_needs + avg_wants + extra,
+                           'spese': avg_variable + rec_by_month.get(m, 0) + extra,
                            'tipo': 'Proiezione' if extra == 0 else 'Proiezione + Extra'})
 
     chart_df = pd.DataFrame(chart_rows)
