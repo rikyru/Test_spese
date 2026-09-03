@@ -35,7 +35,7 @@ def render_split(data_manager: DataManager):
     if 'rules' not in conf: conf['rules'] = [] # List of {type, match, my_share}
     if 'loan_tags' not in conf: conf['loan_tags'] = ['prestito', 'loan', 'anticipo']
     
-    tab_report, tab_settings = st.tabs(["📅 Monthly Report", "⚙️ Rules Configuration"])
+    tab_report, tab_loans, tab_settings = st.tabs(["📅 Monthly Report", "💸 Prestiti / Crediti", "⚙️ Rules Configuration"])
     
     # --- SETTINGS TAB ---
     with tab_settings:
@@ -434,3 +434,72 @@ def render_split(data_manager: DataManager):
                 msg_lines.append(f"- {d_str} {t['description']}: €{abs(t['amount']):.2f}")
 
         st.text_area("Copia questo messaggio", "\n".join(msg_lines), height=300)
+
+    # --- PRESTITI / CREDITI TAB ---
+    with tab_loans:
+        st.subheader("💸 Prestiti / Crediti")
+        st.caption("I soldi che presti escono dal conto ma NON sono una spesa (sono un credito): "
+                   "quando ti restituiscono rientrano nel conto, nel mese in cui li segni.")
+
+        ledger = data_manager.get_loans_ledger()
+        prestato = float(ledger[ledger['source_file'] == 'loan']['amount'].sum()) if not ledger.empty else 0.0
+        restituito = float(-ledger[ledger['source_file'] == 'loan_repay']['amount'].sum()) if not ledger.empty else 0.0
+        da_ricevere = prestato - restituito
+
+        lc1, lc2, lc3 = st.columns(3)
+        lc1.metric("💰 Da ricevere (aperti)", f"€{da_ricevere:,.2f}", help="Crediti ancora da incassare")
+        lc2.metric("✅ Già restituiti", f"€{restituito:,.2f}")
+        lc3.metric("Totale prestato", f"€{prestato:,.2f}")
+
+        accts = data_manager.get_unique_accounts() or ["Contanti"]
+        c1, c2 = st.columns(2)
+        with c1:
+            with st.form("loan_add_form", clear_on_submit=True):
+                st.markdown("**➕ Ho prestato**")
+                ln_name = st.text_input("A chi / per cosa", placeholder="es. Marco")
+                ln_amt = st.number_input("Importo €", min_value=0.0, step=10.0, key="ln_amt")
+                ln_acc = st.selectbox("Dal conto", accts, key="ln_acc")
+                ln_date = st.date_input("Data", date.today(), key="ln_date")
+                if st.form_submit_button("Registra prestito"):
+                    if ln_name and ln_amt > 0:
+                        data_manager.add_loan(ln_name, ln_amt, ln_acc, ln_date)
+                        st.success(f"Prestati €{ln_amt:,.2f} a {ln_name} (usciti da {ln_acc}, ora sono un credito).")
+                        st.rerun()
+                    else:
+                        st.warning("Inserisci nome e importo.")
+        with c2:
+            with st.form("loan_repay_form", clear_on_submit=True):
+                st.markdown("**✅ Mi hanno restituito**")
+                rp_name = st.text_input("Da chi / per cosa", placeholder="es. Marco", key="rp_name")
+                rp_amt = st.number_input("Importo €", min_value=0.0, step=10.0, key="rp_amt")
+                rp_acc = st.selectbox("Sul conto", accts, key="rp_acc")
+                rp_date = st.date_input("Data", date.today(), key="rp_date")
+                if st.form_submit_button("Registra restituzione"):
+                    if rp_name and rp_amt > 0:
+                        data_manager.repay_loan(rp_name, rp_amt, rp_acc, rp_date)
+                        st.success(f"Restituiti €{rp_amt:,.2f} da {rp_name} su {rp_acc}.")
+                        st.rerun()
+                    else:
+                        st.warning("Inserisci nome e importo.")
+
+        if not ledger.empty:
+            st.markdown("#### Movimenti")
+            show = ledger.copy()
+            show['tipo'] = show['source_file'].map({'loan': '➖ Prestito', 'loan_repay': '➕ Restituzione'}).fillna('—')
+            show['data'] = pd.to_datetime(show['date']).dt.strftime('%d/%m/%Y')
+            show['importo'] = show['amount'].apply(lambda x: f"€{x:,.2f}")
+            ev = st.dataframe(show[['data', 'tipo', 'description', 'importo', 'id']],
+                              use_container_width=True, hide_index=True, on_select="rerun",
+                              selection_mode="single-row", key="loan_del_sel",
+                              column_config={"id": None})
+            if ev and ev.selection and ev.selection.rows:
+                _r = show.iloc[ev.selection.rows[0]]
+                if st.button("🗑️ Elimina questo movimento", key="loan_del_btn"):
+                    ids = data_manager.con.execute(
+                        "SELECT id FROM transactions WHERE description=? AND date=? AND source_file=? AND abs(amount)=?",
+                        [_r['description'], pd.to_datetime(_r['date']).date(), _r['source_file'], abs(float(_r['amount']))]
+                    ).fetchall()
+                    data_manager.delete_transactions([x[0] for x in ids])
+                    st.rerun()
+        else:
+            st.caption("Nessun prestito registrato. Aggiungine uno qui sopra.")

@@ -117,10 +117,12 @@ class DataManager:
         """, [date, -my_amount, account, category, tags, name, name, nec])
         return my_amount
 
-    def add_transfer(self, from_account, to_account, amount, date, description=''):
+    def add_transfer(self, from_account, to_account, amount, date, description='',
+                     tag=None, source='manual_transfer'):
         """
-        Registra un trasferimento tra due portafogli come coppia
-        Outgoing/Incoming Transfer (netto zero, escluso da entrate/spese reali).
+        Registra un trasferimento tra due conti come coppia Outgoing/Incoming
+        Transfer (netto zero, escluso da entrate/spese reali). `tag`/`source`
+        permettono di marcarlo (es. prestiti).
         """
         if not from_account or not to_account or from_account == to_account:
             return False
@@ -128,21 +130,44 @@ class DataManager:
         if amt <= 0:
             return False
         desc = description or f"Trasferimento {from_account} → {to_account}"
+        tags = [tag] if tag else []
         self.con.execute("""
             INSERT INTO transactions
                 (id, date, amount, currency, account, category, tags, description,
                  type, source_file, original_description, necessity)
-            VALUES (uuid(), ?, ?, 'EUR', ?, 'Trasferimento', [], ?,
-                    'Outgoing Transfer', 'manual_transfer', ?, 'Need')
-        """, [date, -amt, from_account, desc, desc])
+            VALUES (uuid(), ?, ?, 'EUR', ?, 'Trasferimento', ?, ?,
+                    'Outgoing Transfer', ?, ?, 'Need')
+        """, [date, -amt, from_account, tags, desc, source, desc])
         self.con.execute("""
             INSERT INTO transactions
                 (id, date, amount, currency, account, category, tags, description,
                  type, source_file, original_description, necessity)
-            VALUES (uuid(), ?, ?, 'EUR', ?, 'Trasferimento', [], ?,
-                    'Incoming Transfer', 'manual_transfer', ?, 'Need')
-        """, [date, amt, to_account, desc, desc])
+            VALUES (uuid(), ?, ?, 'EUR', ?, 'Trasferimento', ?, ?,
+                    'Incoming Transfer', ?, ?, 'Need')
+        """, [date, amt, to_account, tags, desc, source, desc])
         return True
+
+    def add_loan(self, name, amount, from_account, date):
+        """Presti dei soldi: escono dal conto verso il conto virtuale 'Prestiti'
+        (credito). Non è una spesa: rientrerà quando ti restituiscono."""
+        return self.add_transfer(from_account, 'Prestiti', amount, date,
+                                 description=f"Prestato: {name}", tag='prestito', source='loan')
+
+    def repay_loan(self, name, amount, to_account, date):
+        """Ti restituiscono un prestito: i soldi rientrano da 'Prestiti' al conto."""
+        return self.add_transfer('Prestiti', to_account, amount, date,
+                                 description=f"Restituito: {name}", tag='restituzione', source='loan_repay')
+
+    def get_loans_ledger(self):
+        """Movimenti del conto 'Prestiti' (prestiti dati e restituzioni ricevute)."""
+        try:
+            return self.con.execute("""
+                SELECT id, date, description, amount, source_file, account
+                FROM transactions WHERE account = 'Prestiti'
+                ORDER BY date DESC
+            """).df()
+        except Exception:
+            return pd.DataFrame(columns=['id', 'date', 'description', 'amount', 'source_file', 'account'])
 
     def setup_db(self):
         self.con.execute("""
