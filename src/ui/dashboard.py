@@ -7,7 +7,7 @@ import datetime
 import calendar
 from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
-from src.ui.analysis import real_income, real_expenses
+from src.ui.analysis import real_income, real_expenses, in_progress_period
 
 def render_dashboard(data_manager):
     st.header("Dashboard")
@@ -215,6 +215,52 @@ def render_dashboard(data_manager):
                                 title += " &nbsp;<span style='background:#FFF3E0;color:#E65100;border-radius:4px;padding:1px 6px;font-size:0.7em;font-weight:700;'>⭐ PRINCIPALE</span>"
                             st.markdown(title, unsafe_allow_html=True)
                             st.markdown(f"<h3 style='margin:0; color: {color};'>€ {bal:,.2f}</h3>", unsafe_allow_html=True)
+
+            # --- 🛟 Fondo Emergenza ---
+            exp_all = real_expenses(full_df).copy()
+            if not exp_all.empty:
+                exp_all['abs'] = exp_all['amount'].abs()
+                mexp = exp_all.groupby(exp_all['date'].dt.to_period('M'))['abs'].sum()
+                inc_all = real_income(full_df)
+                minc = inc_all.groupby(pd.to_datetime(inc_all['date']).dt.to_period('M'))['amount'].sum()
+                ipp = in_progress_period(full_df)   # escludi il mese in corso parziale
+                if ipp is not None:
+                    if ipp in mexp.index:
+                        mexp = mexp.drop(ipp)
+                    if ipp in minc.index:
+                        minc = minc.drop(ipp)
+                avg_exp = float(mexp.median()) if not mexp.empty else 0.0
+                typ_save = float((minc - mexp).dropna().median()) if not (minc - mexp).dropna().empty else 0.0
+
+                target_months = int(re.rules.get('emergency_target_months', 6) or 6)
+                target_amt = target_months * avg_exp
+                runway = (total_liquidity / avg_exp) if avg_exp > 0 else 0
+
+                st.markdown("##### 🛟 Fondo Emergenza")
+                ef1, ef2, ef3, ef4 = st.columns([1, 1, 1, 1.4])
+                ef1.metric("Liquidità", f"€{total_liquidity:,.0f}")
+                ef2.metric("Copre", f"{runway:.1f} mesi", help="Mesi di spese coperti dalla liquidità attuale")
+                ef3.metric(f"Obiettivo ({target_months}m)", f"€{target_amt:,.0f}")
+                new_tm = ef4.slider("Mesi obiettivo", 1, 12, target_months, key="ef_target")
+                if new_tm != target_months:
+                    r = re.rules
+                    r['emergency_target_months'] = int(new_tm)
+                    re.save_rules(r)
+                    st.rerun()
+
+                if target_amt > 0:
+                    pct = min(total_liquidity / target_amt, 1.0)
+                    st.progress(pct, text=f"{pct * 100:.0f}% dell'obiettivo ({target_months} mesi di spese)")
+                    if total_liquidity >= target_amt:
+                        st.success(f"🎉 Fondo emergenza completo: copri {runway:.1f} mesi.")
+                    else:
+                        manca = target_amt - total_liquidity
+                        if typ_save > 0:
+                            st.info(f"Mancano **€{manca:,.0f}**. Risparmiando ~€{typ_save:,.0f}/mese (tipico) "
+                                    f"ci arrivi in ~**{manca / typ_save:.0f} mesi**.")
+                        else:
+                            st.warning(f"Mancano **€{manca:,.0f}**. Col risparmio mensile attuale (≤ 0) l'obiettivo "
+                                       "non avanza: la priorità è chiudere i mesi in positivo.")
 
         # --- Metrics ---
         st.divider()
