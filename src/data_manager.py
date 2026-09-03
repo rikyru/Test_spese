@@ -95,6 +95,28 @@ class DataManager:
         self.con.execute("DELETE FROM planned_expenses WHERE id = ?", [pid])
         return True
 
+    def add_partner_paid_expense(self, name, partner_amount, category, date,
+                                 my_share_pct, account='Partner', extra_tags=None):
+        """
+        Registra una spesa CONDIVISA pagata dal partner. Salva SOLO la tua quota
+        come tua spesa (categoria reale, conto virtuale 'Partner' così non intacca
+        la liquidità dei tuoi conti reali) con tag 'partner_paid'. Il saldo negativo
+        del conto 'Partner' rappresenta quanto devi al partner.
+        Ritorna la tua quota registrata.
+        """
+        my_amount = abs(float(partner_amount)) * (float(my_share_pct) / 100.0)
+        if my_amount <= 0:
+            return 0.0
+        tags = ['diviso', 'partner_paid'] + list(extra_tags or [])
+        nec = self._necessity_from_rules(category, tags)
+        self.con.execute("""
+            INSERT INTO transactions
+                (id, date, amount, currency, account, category, tags, description,
+                 type, source_file, original_description, necessity)
+            VALUES (uuid(), ?, ?, 'EUR', ?, ?, ?, ?, 'Expense', 'partner_paid', ?, ?)
+        """, [date, -my_amount, account, category, tags, name, name, nec])
+        return my_amount
+
     def add_transfer(self, from_account, to_account, amount, date, description=''):
         """
         Registra un trasferimento tra due portafogli come coppia

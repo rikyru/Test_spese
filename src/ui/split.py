@@ -3,6 +3,19 @@ import pandas as pd
 from datetime import datetime, date
 from src.data_manager import DataManager
 
+
+def _my_share_pct(category, tags, conf):
+    """Quota % a mio carico per categoria/tag, secondo le regole di split (Tag > Categoria > Default)."""
+    tset = [str(t).lower().replace('#', '').strip() for t in (tags or [])]
+    for r in conf.get('rules', []):
+        if r.get('type') == 'tag' and r.get('match', '').lower().replace('#', '').strip() in tset:
+            return r['my_share']
+    for r in conf.get('rules', []):
+        if r.get('type') == 'category' and r.get('match') == category:
+            return r['my_share']
+    return conf.get('default_share_pct', 50)
+
+
 def render_split(data_manager: DataManager):
     st.header("💞 Expense Splitting (Granular)")
     
@@ -113,7 +126,29 @@ def render_split(data_manager: DataManager):
                 
         with col_d2:
             sel_month = st.selectbox("Month", range(1, 13), index=today.month - 1)
-            
+
+        # --- Ha pagato il partner (spesa condivisa pagata da lui/lei) ---
+        with st.expander(f"🛒 Ha pagato {conf['partner_name']} (spesa condivisa)", expanded=False):
+            st.caption(f"La tua quota diventa una tua spesa e **riduce** quanto {conf['partner_name']} ti deve. "
+                       "Registrata su un conto virtuale 'Partner' (non tocca i tuoi conti reali).")
+            with st.form("partner_paid_form", clear_on_submit=True):
+                pp1, pp2 = st.columns([3, 2])
+                pp_name = pp1.text_input("Descrizione", placeholder="es. Spesa alimentare Coop")
+                pp_amount = pp2.number_input("Importo pagato dal partner €", min_value=0.0, step=1.0)
+                pp3, pp4, pp5 = st.columns(3)
+                pp_cat = pp3.selectbox("Categoria", data_manager.get_unique_categories())
+                pp_date = pp4.date_input("Data", today, key="pp_date")
+                pp_share = pp5.slider("La mia quota %", 0, 100,
+                                      int(_my_share_pct(pp_cat, [], conf)), key="pp_share")
+                if st.form_submit_button("Registra spesa del partner"):
+                    if pp_name and pp_amount > 0:
+                        my_amt = data_manager.add_partner_paid_expense(pp_name, pp_amount, pp_cat, pp_date, pp_share)
+                        st.success(f"Registrata la tua quota €{my_amt:,.2f} ({pp_share}% di €{pp_amount:,.0f}). "
+                                   f"{conf['partner_name']} ti deve €{my_amt:,.2f} in meno.")
+                        st.rerun()
+                    else:
+                        st.warning("Inserisci descrizione e importo.")
+
         # Filter Data
         if df_all.empty:
             st.info("No transactions found.")
@@ -139,9 +174,11 @@ def render_split(data_manager: DataManager):
         
         split_transactions = []
         loan_transactions = []
-        
+        partner_paid_transactions = []
+
         total_partner_owes = 0.0
-        
+        partner_paid_total = 0.0
+
         for idx, row in df_m.iterrows():
             amount = abs(row['amount'])
             
@@ -193,7 +230,15 @@ def render_split(data_manager: DataManager):
                 tags = []
                 
             category = row['category']
-            
+
+            # 0. Ha pagato il partner: è una TUA quota già a tuo carico -> scomputa
+            if 'partner_paid' in tags:
+                partner_paid_transactions.append(row)
+                partner_paid_total += amount
+                df_m.at[idx, 'debug_tags_clean'] = str(tags)
+                df_m.at[idx, 'debug_log'] = "Partner ha pagato (tua quota, scomputata)"
+                continue
+
             # 1. Check Loan
             clean_loan_tags = [t.lower().replace('#', '').strip() for t in loan_tags]
             is_loan = any(t in tags for t in clean_loan_tags)
@@ -272,12 +317,21 @@ def render_split(data_manager: DataManager):
 
 
         # --- RESULTS ---
+        net_owed = total_partner_owes - partner_paid_total
         st.divider()
         col_res1, col_res2 = st.columns(2)
-        
+
         with col_res1:
-             st.metric("Total Partner Owes", f"€{total_partner_owes:,.2f}")
-             
+            st.metric(f"Saldo: {conf['partner_name']} ti deve", f"€{net_owed:,.2f}",
+                      help=f"Lordo €{total_partner_owes:,.2f} − tua quota su spese pagate da "
+                           f"{conf['partner_name']} €{partner_paid_total:,.2f}")
+        with col_res2:
+            if partner_paid_total > 0:
+                st.metric(f"Ha pagato {conf['partner_name']} (tua quota)", f"€{partner_paid_total:,.2f}",
+                          delta=f"-€{partner_paid_total:,.2f}", delta_color="inverse")
+        if net_owed < 0:
+            st.info(f"Saldo a favore di {conf['partner_name']}: sei tu a dovergli **€{abs(net_owed):,.2f}**.")
+
         # Breakdown
         st.subheader("Details")
         
@@ -291,11 +345,25 @@ def render_split(data_manager: DataManager):
                 
             if loan_transactions:
                 st.write("### Direct Loans (100%)")
-                # Handle if loan_transactions is list of Series or Dicts. 
+                # Handle if loan_transactions is list of Series or Dicts.
                 # If Series, pd.DataFrame works. If Mixed, careful.
                 # Currently loan_transactions appends 'row' which is Series.
                 l_df = pd.DataFrame(loan_transactions)
                 st.dataframe(l_df[['date', 'description', 'tags', 'amount']], use_container_width=True)
+
+            if partner_paid_transactions:
+                st.write(f"### Pagate da {conf['partner_name']} (tua quota, a tuo carico)")
+                pp_df = pd.DataFrame(partner_paid_transactions).copy()
+                pp_df['tua_quota'] = pp_df['amount'].abs()
+                pp_show = pp_df[['date', 'description', 'category', 'tua_quota', 'id']]
+                pp_ev = st.dataframe(pp_show, use_container_width=True, hide_index=True,
+                                     on_select="rerun", selection_mode="single-row",
+                                     key="pp_del_sel", column_config={"id": None})
+                if pp_ev and pp_ev.selection and pp_ev.selection.rows:
+                    _pid = pp_show.iloc[pp_ev.selection.rows[0]]['id']
+                    if st.button("🗑️ Elimina la voce selezionata", key="pp_del_btn"):
+                        data_manager.delete_transactions([_pid])
+                        st.rerun()
                 
         with tab_debug:
             st.warning("Use this to check why a transaction is (or isn't) being split.")
@@ -306,7 +374,12 @@ def render_split(data_manager: DataManager):
         st.subheader("📲 WhatsApp Export")
         
         msg_lines = [f"📊 *Riassunto Spese {sel_month}/{sel_year}*"]
-        msg_lines.append(f"Totale da dare: *€{total_partner_owes:,.2f}*")
+        if net_owed >= 0:
+            msg_lines.append(f"Saldo: mi devi *€{net_owed:,.2f}*")
+        else:
+            msg_lines.append(f"Saldo: ti devo *€{abs(net_owed):,.2f}*")
+        if partner_paid_total > 0:
+            msg_lines.append(f"(lordo €{total_partner_owes:,.2f} − tua quota su spese che hai pagato tu €{partner_paid_total:,.2f})")
         msg_lines.append("")
         
         if split_transactions:
@@ -352,5 +425,12 @@ def render_split(data_manager: DataManager):
              for t in loan_transactions:
                  d_str = t['date'].strftime('%d/%m') if hasattr(t['date'], 'strftime') else str(t['date'])[:10]
                  msg_lines.append(f"- {d_str} {t['description']}: €{abs(t['amount']):.2f}")
-                 
+
+        if partner_paid_transactions:
+            msg_lines.append("")
+            msg_lines.append(f"🔻 *Hai pagato tu (mia quota, a mio carico):*")
+            for t in partner_paid_transactions:
+                d_str = t['date'].strftime('%d/%m') if hasattr(t['date'], 'strftime') else str(t['date'])[:10]
+                msg_lines.append(f"- {d_str} {t['description']}: €{abs(t['amount']):.2f}")
+
         st.text_area("Copia questo messaggio", "\n".join(msg_lines), height=300)
