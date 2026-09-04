@@ -323,15 +323,15 @@ def render_split(data_manager: DataManager):
 
 
         # --- RESULTS ---
-        partner_loan_net = data_manager.get_partner_loan_net(sel_year, sel_month)  # + prestato - restituito
-        net_owed = total_partner_owes - partner_paid_total + partner_loan_net
+        partner_loan_bal = data_manager.get_partner_loan_balance()  # saldo aperto (all-time)
+        net_owed = total_partner_owes - partner_paid_total + partner_loan_bal
         st.divider()
         col_res1, col_res2, col_res3 = st.columns(3)
 
-        _help = (f"Spese condivise €{total_partner_owes:,.2f} "
+        _help = (f"Spese condivise del mese €{total_partner_owes:,.2f} "
                  f"− tua quota su spese pagate da {conf['partner_name']} €{partner_paid_total:,.2f}")
-        if partner_loan_net:
-            _help += f" {'+' if partner_loan_net >= 0 else '−'} prestiti col partner €{abs(partner_loan_net):,.2f}"
+        if partner_loan_bal:
+            _help += f" {'+' if partner_loan_bal >= 0 else '−'} prestiti col partner (aperti) €{abs(partner_loan_bal):,.2f}"
         with col_res1:
             st.metric(f"Saldo: {conf['partner_name']} ti deve", f"€{net_owed:,.2f}", help=_help)
         with col_res2:
@@ -339,9 +339,9 @@ def render_split(data_manager: DataManager):
                 st.metric(f"Ha pagato {conf['partner_name']} (tua quota)", f"€{partner_paid_total:,.2f}",
                           delta=f"-€{partner_paid_total:,.2f}", delta_color="inverse")
         with col_res3:
-            if partner_loan_net:
-                st.metric("Prestiti col partner (mese)", f"€{partner_loan_net:,.2f}",
-                          help="Prestato al partner − restituito dal partner in questo mese")
+            if partner_loan_bal:
+                st.metric("Prestiti col partner (aperti)", f"€{partner_loan_bal:,.2f}",
+                          help="Saldo prestiti col partner ancora aperti (a prescindere dal mese)")
         if net_owed < 0:
             st.info(f"Saldo a favore di {conf['partner_name']}: sei tu a dovergli **€{abs(net_owed):,.2f}**.")
 
@@ -391,12 +391,12 @@ def render_split(data_manager: DataManager):
             msg_lines.append(f"Saldo: mi devi *€{net_owed:,.2f}*")
         else:
             msg_lines.append(f"Saldo: ti devo *€{abs(net_owed):,.2f}*")
-        if partner_paid_total > 0 or partner_loan_net:
+        if partner_paid_total > 0 or partner_loan_bal:
             _b = f"(spese condivise €{total_partner_owes:,.2f}"
             if partner_paid_total > 0:
                 _b += f" − tua quota su spese che hai pagato tu €{partner_paid_total:,.2f}"
-            if partner_loan_net:
-                _b += f" {'+' if partner_loan_net >= 0 else '−'} prestiti €{abs(partner_loan_net):,.2f}"
+            if partner_loan_bal:
+                _b += f" {'+' if partner_loan_bal >= 0 else '−'} prestiti aperti €{abs(partner_loan_bal):,.2f}"
             _b += ")"
             msg_lines.append(_b)
         msg_lines.append("")

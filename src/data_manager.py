@@ -182,15 +182,15 @@ class DataManager:
         )
         return True
 
-    def get_partner_loan_net(self, year, month):
-        """Effetto netto dei prestiti col partner nel mese (+ prestato al partner
-        − restituito dal partner), da sommare al dovuto del partner."""
+    def get_partner_loan_balance(self):
+        """Saldo APERTO dei prestiti col partner (all-time): + prestato al partner
+        − restituito dal partner. Resta dovuto finché non viene restituito, a
+        prescindere dal mese. Da sommare al dovuto del partner."""
         try:
             res = self.con.execute("""
                 SELECT COALESCE(SUM(amount), 0) FROM transactions
                 WHERE account = 'Partner' AND source_file IN ('loan', 'loan_repay')
-                  AND YEAR(date) = ? AND MONTH(date) = ?
-            """, [year, month]).fetchone()
+            """).fetchone()
             return float(res[0]) if res else 0.0
         except Exception:
             return 0.0
