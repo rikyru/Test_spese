@@ -173,6 +173,15 @@ class DataManager:
         except Exception:
             return pd.DataFrame(columns=['id', 'date', 'description', 'amount', 'source_file', 'account'])
 
+    def move_loan_to_partner(self, tx_id):
+        """Sposta un prestito generico (leg sul conto 'Prestiti') sul conto 'Partner',
+        così entra nel dovuto del partner. Non tocca la leg del conto reale."""
+        self.con.execute(
+            "UPDATE transactions SET account = 'Partner' WHERE id = ? AND account = 'Prestiti'",
+            [tx_id]
+        )
+        return True
+
     def get_partner_loan_net(self, year, month):
         """Effetto netto dei prestiti col partner nel mese (+ prestato al partner
         − restituito dal partner), da sommare al dovuto del partner."""

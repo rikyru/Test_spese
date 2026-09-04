@@ -140,9 +140,15 @@ def render_split(data_manager: DataManager):
                 pp_date = pp4.date_input("Data", today, key="pp_date")
                 pp_share = pp5.slider("La mia quota %", 0, 100,
                                       int(_my_share_pct(pp_cat, [], conf)), key="pp_share")
+                pp_tags_sel = st.multiselect("Tag", data_manager.get_unique_tags(), key="pp_tags")
+                pp_new_tag = st.text_input("Nuovo tag (opzionale)", placeholder="#coop", key="pp_new_tag")
                 if st.form_submit_button("Registra spesa del partner"):
                     if pp_name and pp_amount > 0:
-                        my_amt = data_manager.add_partner_paid_expense(pp_name, pp_amount, pp_cat, pp_date, pp_share)
+                        pp_tags = list(pp_tags_sel)
+                        if pp_new_tag.strip():
+                            pp_tags.append(pp_new_tag.strip().replace('#', '').lower())
+                        my_amt = data_manager.add_partner_paid_expense(pp_name, pp_amount, pp_cat, pp_date,
+                                                                       pp_share, extra_tags=pp_tags)
                         st.success(f"Registrata la tua quota €{my_amt:,.2f} ({pp_share}% di €{pp_amount:,.0f}). "
                                    f"{conf['partner_name']} ti deve €{my_amt:,.2f} in meno.")
                         st.rerun()
@@ -510,6 +516,20 @@ def render_split(data_manager: DataManager):
                               column_config={"id": None})
             if ev and ev.selection and ev.selection.rows:
                 _r = show.iloc[ev.selection.rows[0]]
+                _name = str(_r['description']).replace('Prestato: ', '').replace('Restituito: ', '')
+                _amt = abs(float(_r['amount']))
+                if _r['source_file'] == 'loan':
+                    st.markdown(f"**Azioni su:** {_r['description']} — €{_amt:,.2f}")
+                    ac1, ac2, ac3 = st.columns(3)
+                    rec_acc = ac1.selectbox("Conto rientro", accts, key="loan_rec_acc")
+                    if ac2.button("✅ Segna ricevuto", key="loan_rec_btn"):
+                        data_manager.repay_loan(_name, _amt, rec_acc, date.today())
+                        st.success(f"Segnato ricevuto €{_amt:,.2f} da {_name} su {rec_acc}.")
+                        st.rerun()
+                    if ac3.button(f"🤝 Sposta nel dovuto {conf['partner_name']}", key="loan_mv_btn"):
+                        data_manager.move_loan_to_partner(_r['id'])
+                        st.success(f"Prestito spostato nel dovuto di {conf['partner_name']}.")
+                        st.rerun()
                 if st.button("🗑️ Elimina questo movimento", key="loan_del_btn"):
                     ids = data_manager.con.execute(
                         "SELECT id FROM transactions WHERE description=? AND date=? AND source_file=? AND abs(amount)=?",
