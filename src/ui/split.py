@@ -345,6 +345,32 @@ def render_split(data_manager: DataManager):
         if net_owed < 0:
             st.info(f"Saldo a favore di {conf['partner_name']}: sei tu a dovergli **€{abs(net_owed):,.2f}**.")
 
+        # Dettaglio prestiti col partner + "segna restituito"
+        pl_detail = data_manager.get_partner_loans_detail()
+        if not pl_detail.empty:
+            grp = pl_detail.groupby('name').apply(
+                lambda x: pd.Series({
+                    'prestato': x.loc[x['source_file'] == 'loan', 'amount'].sum(),
+                    'restituito': -x.loc[x['source_file'] == 'loan_repay', 'amount'].sum(),
+                })
+            ).reset_index()
+            grp['aperto'] = grp['prestato'] - grp['restituito']
+
+            with st.expander(f"💸 Dettaglio prestiti con {conf['partner_name']}", expanded=True):
+                accts_report = [a for a in (data_manager.get_unique_accounts() or ['Contanti'])
+                                if a not in ('Partner', 'Prestiti')] or ['Contanti']
+                rec_acc_p = st.selectbox("Conto di rientro (per 'segna restituito')", accts_report, key="prep_acc")
+                for _, r in grp.iterrows():
+                    pc1, pc2, pc3 = st.columns([3, 3, 2])
+                    pc1.markdown(f"**{r['name']}**")
+                    stato = f"aperto **€{r['aperto']:,.0f}**" if r['aperto'] > 0.01 else "✅ restituito"
+                    pc2.caption(f"prestato €{r['prestato']:,.0f} · restituito €{r['restituito']:,.0f} · {stato}")
+                    if r['aperto'] > 0.01:
+                        if pc3.button(f"✅ Restituito €{r['aperto']:,.0f}", key=f"prep_{r['name']}"):
+                            data_manager.repay_loan(r['name'], float(r['aperto']), rec_acc_p, today, from_partner=True)
+                            st.success(f"Segnato restituito €{r['aperto']:,.0f} da {conf['partner_name']} ({r['name']}).")
+                            st.rerun()
+
         # Breakdown
         st.subheader("Details")
         

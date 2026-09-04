@@ -182,6 +182,23 @@ class DataManager:
         )
         return True
 
+    def get_partner_loans_detail(self):
+        """Righe dei prestiti col partner (movimenti su conto 'Partner', source
+        loan/loan_repay) con colonna 'name' (nome del prestito)."""
+        try:
+            df = self.con.execute("""
+                SELECT id, date, description, amount, source_file FROM transactions
+                WHERE account = 'Partner' AND source_file IN ('loan', 'loan_repay')
+                ORDER BY date
+            """).df()
+        except Exception:
+            return pd.DataFrame(columns=['id', 'date', 'description', 'amount', 'source_file', 'name'])
+        if not df.empty:
+            df['name'] = (df['description'].astype(str)
+                          .str.replace('Prestato: ', '', regex=False)
+                          .str.replace('Restituito: ', '', regex=False))
+        return df
+
     def get_partner_loan_balance(self):
         """Saldo APERTO dei prestiti col partner (all-time): + prestato al partner
         − restituito dal partner. Resta dovuto finché non viene restituito, a
