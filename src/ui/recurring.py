@@ -1,15 +1,21 @@
 import streamlit as st
 import pandas as pd
-from src.data_manager import DataManager
+import plotly.express as px
+from src.data_manager import DataManager, advance_date
+
+# Occorrenze al mese per frequenza (per normalizzare l'impegno mensile)
+_FREQ_PER_MONTH = {'Monthly': 1.0, 'Bimonthly': 0.5, 'Quarterly': 1 / 3,
+                   'Yearly': 1 / 12, 'Weekly': 4.33}
+
 
 def render_recurring(data_manager: DataManager):
     st.title("🔁 Recurring Expenses (Spese Fisse)")
-    
+
     # --- Action Section ---
     col_act_1, col_act_2 = st.columns([3, 1])
     with col_act_1:
-        st.info("Manage your fixed expenses here. The system will automatically generate transactions when they are due.")
-    
+        st.info("Gestisci qui le spese fisse. Il sistema genera le transazioni quando scadono.")
+
     with col_act_2:
         if st.button("🔄 Check & Generate Due", type="primary", use_container_width=True):
             with st.spinner("Checking due expenses..."):
@@ -17,10 +23,73 @@ def render_recurring(data_manager: DataManager):
                 if count > 0:
                     st.success(f"Generated {count} transactions!")
                     st.toast(f"Generated {count} transactions!", icon="✅")
-                    # Optional: st.rerun() if we want to show them immediately in a log, but not strictly needed here
                 else:
                     st.info("No expenses due today.")
                     st.toast("No expenses due today.", icon="ℹ️")
+
+    # --- OVERVIEW d'impatto ---
+    _rec = data_manager.get_recurring()
+    if not _rec.empty:
+        _rec = _rec.copy()
+        _rec['abs'] = _rec['amount'].abs()
+        _rec['mensile'] = _rec.apply(lambda r: r['abs'] * _FREQ_PER_MONTH.get(r['frequency'], 1.0), axis=1)
+        # spese (amount negativo o categoria non-entrata): consideriamo tutte come impegni
+        tot_mese = _rec['mensile'].sum()
+
+        has_inst = 'remaining_installments' in _rec.columns
+        rate_df = _rec[_rec['remaining_installments'].notna()] if has_inst else _rec.iloc[0:0]
+        residuo_rate = float((rate_df['remaining_installments'] * rate_df['abs']).sum()) if not rate_df.empty else 0.0
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("💶 Impegno mensile", f"€{tot_mese:,.0f}", help="Totale ricorrenti normalizzate al mese")
+        k2.metric("📆 Proiezione annua", f"€{tot_mese * 12:,.0f}")
+        k3.metric("🔢 Voci attive", str(len(_rec)))
+        k4.metric("🧾 Residuo rate", f"€{residuo_rate:,.0f}", help="Somma ancora da pagare delle voci a rate")
+
+        oc1, oc2 = st.columns([1, 1])
+        # Donut per categoria (impegno mensile)
+        with oc1:
+            bycat = _rec.groupby('category')['mensile'].sum().reset_index().sort_values('mensile', ascending=False)
+            fig = px.pie(bycat, values='mensile', names='category', hole=0.55,
+                         title="Impegno mensile per categoria")
+            fig.update_layout(height=300, margin=dict(t=40, b=0, l=0, r=0),
+                              legend=dict(orientation='h', y=-0.1))
+            st.plotly_chart(fig, use_container_width=True)
+        # Top voci per impegno mensile
+        with oc2:
+            st.markdown("**Voci più pesanti (al mese)**")
+            top = _rec.sort_values('mensile', ascending=False).head(6)
+            for _, r in top.iterrows():
+                bar = min(r['mensile'] / _rec['mensile'].max(), 1.0) if _rec['mensile'].max() else 0
+                st.markdown(f"{r['name']} — **€{r['mensile']:,.0f}/mese** "
+                            f"<span style='color:#888;font-size:0.85em'>({r['frequency']})</span>",
+                            unsafe_allow_html=True)
+                st.progress(bar)
+
+        # --- Rate / Finanziamenti in corso ---
+        if not rate_df.empty:
+            st.markdown("### 🧾 Rate / Finanziamenti in corso")
+            for _, r in rate_df.sort_values('remaining_installments').iterrows():
+                rem = int(r['remaining_installments'])
+                tot = int(r['installments_total']) if ('installments_total' in r and pd.notna(r['installments_total'])) else rem
+                paid = max(tot - rem, 0)
+                rata = r['abs']
+                residuo = rem * rata
+                # data fine stimata
+                try:
+                    end = pd.to_datetime(r['next_date']).date()
+                    for _ in range(rem - 1):
+                        end = advance_date(end, r['frequency'])
+                    end_str = end.strftime('%b %Y')
+                except Exception:
+                    end_str = "—"
+                rc1, rc2 = st.columns([3, 2])
+                rc1.markdown(f"**{r['name']}** — rata €{rata:,.0f} · **{rem}** rate residue "
+                             f"(€{residuo:,.0f}) · fine ~{end_str}")
+                rc1.progress(min(paid / tot, 1.0) if tot else 0, text=f"pagate {paid}/{tot}")
+                rc2.metric("Residuo", f"€{residuo:,.0f}")
+
+    st.divider()
 
     # --- Upcoming Projections Section ---
     from datetime import date, timedelta
@@ -219,23 +288,6 @@ def render_recurring(data_manager: DataManager):
     st.subheader("📋 Active Templates")
 
     rec_df = data_manager.get_recurring()
-
-    # Avanzamento rate (per gli impegni con numero di rate definito)
-    if not rec_df.empty and 'installments_total' in rec_df.columns:
-        with_progress = rec_df[rec_df['installments_total'].notna() &
-                               rec_df['remaining_installments'].notna()]
-        if not with_progress.empty:
-            st.markdown("**📊 Avanzamento rate**")
-            for _, r in with_progress.iterrows():
-                tot = int(r['installments_total'])
-                rem = int(r['remaining_installments'])
-                paid = max(tot - rem, 0)
-                amt = abs(float(r['amount']))
-                pct = (paid / tot) if tot else 0
-                st.markdown(f"**{r['name']}** — pagate {paid}/{tot} · "
-                            f"restano **{rem} rate** (€{rem * amt:,.0f}) · rata €{amt:,.0f}")
-                st.progress(min(pct, 1.0), text=f"{pct * 100:.0f}% completato")
-            st.divider()
 
     if not rec_df.empty:
         # Display as a table with more details
