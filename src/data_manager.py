@@ -147,27 +147,44 @@ class DataManager:
         """, [date, amt, to_account, tags, desc, source, desc])
         return True
 
-    def add_loan(self, name, amount, from_account, date):
-        """Presti dei soldi: escono dal conto verso il conto virtuale 'Prestiti'
-        (credito). Non è una spesa: rientrerà quando ti restituiscono."""
-        return self.add_transfer(from_account, 'Prestiti', amount, date,
+    def add_loan(self, name, amount, from_account, date, to_partner=False):
+        """Presti dei soldi: escono dal conto verso un conto virtuale (credito).
+        Se `to_partner`, va sul conto 'Partner' così entra nel dovuto del partner;
+        altrimenti sul conto 'Prestiti'. Non è una spesa: rientrerà con la restituzione."""
+        dest = 'Partner' if to_partner else 'Prestiti'
+        return self.add_transfer(from_account, dest, amount, date,
                                  description=f"Prestato: {name}", tag='prestito', source='loan')
 
-    def repay_loan(self, name, amount, to_account, date):
-        """Ti restituiscono un prestito: i soldi rientrano da 'Prestiti' al conto."""
-        return self.add_transfer('Prestiti', to_account, amount, date,
+    def repay_loan(self, name, amount, to_account, date, from_partner=False):
+        """Ti restituiscono un prestito: i soldi rientrano dal conto virtuale al conto reale."""
+        src = 'Partner' if from_partner else 'Prestiti'
+        return self.add_transfer(src, to_account, amount, date,
                                  description=f"Restituito: {name}", tag='restituzione', source='loan_repay')
 
-    def get_loans_ledger(self):
-        """Movimenti del conto 'Prestiti' (prestiti dati e restituzioni ricevute)."""
+    def get_loans_ledger(self, account='Prestiti'):
+        """Movimenti del conto crediti (prestiti dati e restituzioni ricevute)."""
         try:
             return self.con.execute("""
                 SELECT id, date, description, amount, source_file, account
-                FROM transactions WHERE account = 'Prestiti'
+                FROM transactions WHERE account = ?
+                  AND source_file IN ('loan', 'loan_repay')
                 ORDER BY date DESC
-            """).df()
+            """, [account]).df()
         except Exception:
             return pd.DataFrame(columns=['id', 'date', 'description', 'amount', 'source_file', 'account'])
+
+    def get_partner_loan_net(self, year, month):
+        """Effetto netto dei prestiti col partner nel mese (+ prestato al partner
+        − restituito dal partner), da sommare al dovuto del partner."""
+        try:
+            res = self.con.execute("""
+                SELECT COALESCE(SUM(amount), 0) FROM transactions
+                WHERE account = 'Partner' AND source_file IN ('loan', 'loan_repay')
+                  AND YEAR(date) = ? AND MONTH(date) = ?
+            """, [year, month]).fetchone()
+            return float(res[0]) if res else 0.0
+        except Exception:
+            return 0.0
 
     def setup_db(self):
         self.con.execute("""

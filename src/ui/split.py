@@ -317,18 +317,25 @@ def render_split(data_manager: DataManager):
 
 
         # --- RESULTS ---
-        net_owed = total_partner_owes - partner_paid_total
+        partner_loan_net = data_manager.get_partner_loan_net(sel_year, sel_month)  # + prestato - restituito
+        net_owed = total_partner_owes - partner_paid_total + partner_loan_net
         st.divider()
-        col_res1, col_res2 = st.columns(2)
+        col_res1, col_res2, col_res3 = st.columns(3)
 
+        _help = (f"Spese condivise €{total_partner_owes:,.2f} "
+                 f"− tua quota su spese pagate da {conf['partner_name']} €{partner_paid_total:,.2f}")
+        if partner_loan_net:
+            _help += f" {'+' if partner_loan_net >= 0 else '−'} prestiti col partner €{abs(partner_loan_net):,.2f}"
         with col_res1:
-            st.metric(f"Saldo: {conf['partner_name']} ti deve", f"€{net_owed:,.2f}",
-                      help=f"Lordo €{total_partner_owes:,.2f} − tua quota su spese pagate da "
-                           f"{conf['partner_name']} €{partner_paid_total:,.2f}")
+            st.metric(f"Saldo: {conf['partner_name']} ti deve", f"€{net_owed:,.2f}", help=_help)
         with col_res2:
             if partner_paid_total > 0:
                 st.metric(f"Ha pagato {conf['partner_name']} (tua quota)", f"€{partner_paid_total:,.2f}",
                           delta=f"-€{partner_paid_total:,.2f}", delta_color="inverse")
+        with col_res3:
+            if partner_loan_net:
+                st.metric("Prestiti col partner (mese)", f"€{partner_loan_net:,.2f}",
+                          help="Prestato al partner − restituito dal partner in questo mese")
         if net_owed < 0:
             st.info(f"Saldo a favore di {conf['partner_name']}: sei tu a dovergli **€{abs(net_owed):,.2f}**.")
 
@@ -378,8 +385,14 @@ def render_split(data_manager: DataManager):
             msg_lines.append(f"Saldo: mi devi *€{net_owed:,.2f}*")
         else:
             msg_lines.append(f"Saldo: ti devo *€{abs(net_owed):,.2f}*")
-        if partner_paid_total > 0:
-            msg_lines.append(f"(lordo €{total_partner_owes:,.2f} − tua quota su spese che hai pagato tu €{partner_paid_total:,.2f})")
+        if partner_paid_total > 0 or partner_loan_net:
+            _b = f"(spese condivise €{total_partner_owes:,.2f}"
+            if partner_paid_total > 0:
+                _b += f" − tua quota su spese che hai pagato tu €{partner_paid_total:,.2f}"
+            if partner_loan_net:
+                _b += f" {'+' if partner_loan_net >= 0 else '−'} prestiti €{abs(partner_loan_net):,.2f}"
+            _b += ")"
+            msg_lines.append(_b)
         msg_lines.append("")
         
         if split_transactions:
@@ -460,10 +473,12 @@ def render_split(data_manager: DataManager):
                 ln_amt = st.number_input("Importo €", min_value=0.0, step=10.0, key="ln_amt")
                 ln_acc = st.selectbox("Dal conto", accts, key="ln_acc")
                 ln_date = st.date_input("Data", date.today(), key="ln_date")
+                ln_partner = st.checkbox(f"Conta nel dovuto di {conf['partner_name']}", key="ln_partner")
                 if st.form_submit_button("Registra prestito"):
                     if ln_name and ln_amt > 0:
-                        data_manager.add_loan(ln_name, ln_amt, ln_acc, ln_date)
-                        st.success(f"Prestati €{ln_amt:,.2f} a {ln_name} (usciti da {ln_acc}, ora sono un credito).")
+                        data_manager.add_loan(ln_name, ln_amt, ln_acc, ln_date, to_partner=ln_partner)
+                        extra = f" — aggiunto al dovuto di {conf['partner_name']}" if ln_partner else ""
+                        st.success(f"Prestati €{ln_amt:,.2f} a {ln_name} (usciti da {ln_acc}){extra}.")
                         st.rerun()
                     else:
                         st.warning("Inserisci nome e importo.")
@@ -474,9 +489,10 @@ def render_split(data_manager: DataManager):
                 rp_amt = st.number_input("Importo €", min_value=0.0, step=10.0, key="rp_amt")
                 rp_acc = st.selectbox("Sul conto", accts, key="rp_acc")
                 rp_date = st.date_input("Data", date.today(), key="rp_date")
+                rp_partner = st.checkbox(f"Era un prestito a {conf['partner_name']}", key="rp_partner")
                 if st.form_submit_button("Registra restituzione"):
                     if rp_name and rp_amt > 0:
-                        data_manager.repay_loan(rp_name, rp_amt, rp_acc, rp_date)
+                        data_manager.repay_loan(rp_name, rp_amt, rp_acc, rp_date, from_partner=rp_partner)
                         st.success(f"Restituiti €{rp_amt:,.2f} da {rp_name} su {rp_acc}.")
                         st.rerun()
                     else:
