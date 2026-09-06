@@ -9,8 +9,10 @@ DB al primo avvio utile (`DataManager.drain_inbox`).
 """
 
 import json
+import math
 import os
 import struct
+import threading
 import zlib
 from datetime import date, datetime
 from pathlib import Path
@@ -29,43 +31,93 @@ router = APIRouter(prefix="/quick")
 
 
 # ---------------------------------------------------------------------------
-# Icona: PNG generato a mano (niente Pillow nell'immagine, sarebbe l'unica dipendenza
-# pesante solo per due file statici).
+# Icona: disegnata con funzioni di distanza e antialiasing, senza dipendenze
+# grafiche (Pillow sarebbe l'unica libreria pesante, solo per due file statici).
 # ---------------------------------------------------------------------------
 
-_EURO_MASK = [
-    "................",
-    "................",
-    "................",
-    ".....xxxxxxx....",
-    "....xx.....xx...",
-    "...xx........x..",
-    "...xx...........",
-    "..xxxxxxxx......",
-    "...xx...........",
-    "..xxxxxxxx......",
-    "...xx...........",
-    "...xx........x..",
-    "....xx.....xx...",
-    ".....xxxxxxx....",
-    "................",
-    "................",
-]
-
-_BG = (16, 24, 39)      # slate-900
-_FG = (74, 222, 128)    # green-400
+_BG_TOP = (26, 42, 66)      # slate scuro, in alto
+_BG_BOT = (11, 18, 32)      # quasi nero, in basso
+_GLOW = (34, 197, 94)       # alone verde dietro il simbolo
+_FG_TOP = (134, 239, 172)   # verde chiaro
+_FG_BOT = (34, 197, 94)     # verde pieno
 
 
-def _png(size: int) -> bytes:
-    """Renderizza la maschera ASCII come PNG RGB a `size` px (nearest neighbour)."""
-    mh, mw = len(_EURO_MASK), len(_EURO_MASK[0])
+def _sd_round_box(px, py, hw, hh, r):
+    """Distanza con segno da un rettangolo a spigoli arrotondati."""
+    qx, qy = abs(px) - hw + r, abs(py) - hh + r
+    return math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
+
+
+def _sd_euro(px, py):
+    """Distanza con segno dal simbolo €: un arco aperto a destra e due sbarre."""
+    # Arco (la "C"), con estremita' arrotondate
+    cx, r_mid, half_w, cut = 0.06, 0.60, 0.095, math.radians(40)
+    vx, vy = px - cx, py
+    rad = math.hypot(vx, vy)
+    if abs(math.atan2(vy, vx)) > cut:
+        d = abs(rad - r_mid) - half_w
+    else:
+        ex, ey = cx + r_mid * math.cos(cut), r_mid * math.sin(cut)
+        d = min(math.hypot(px - ex, py - ey), math.hypot(px - ex, py + ey)) - half_w
+    # Le due sbarre orizzontali
+    for by in (-0.17, 0.17):
+        d = min(d, _sd_round_box(px + 0.19, py - by, 0.61, 0.075, 0.075))
+    return d
+
+
+def _render(size: int, maskable: bool) -> bytes:
+    """RGB `size`x`size` con supersampling 2x. `maskable`: sfondo a tutto campo
+    e simbolo piu' piccolo, perche' Android ritaglia i bordi con la sua forma."""
+    ss = 2
+    n = size * ss
+    glyph_scale = 0.62 if maskable else 0.78
+    corner = None if maskable else 0.46
+    px_norm = 2.0 / n
+
+    # 1) Accumulo a risoluzione doppia, 2) media a blocchi -> antialiasing.
+    acc = [[0.0] * (size * 3) for _ in range(size)]
+    for iy in range(n):
+        y = (iy + 0.5) / n * 2 - 1
+        oy = iy // ss
+        arow = acc[oy]
+        for ix in range(n):
+            x = (ix + 0.5) / n * 2 - 1
+
+            # Sfondo: sfumatura verticale + alone verde dietro al simbolo
+            t = (y + 1) / 2
+            glow = max(0.0, 1.0 - math.hypot(x, y + 0.05) / 1.15) ** 2.4 * 0.30
+            r = _BG_TOP[0] + (_BG_BOT[0] - _BG_TOP[0]) * t + _GLOW[0] * glow
+            g = _BG_TOP[1] + (_BG_BOT[1] - _BG_TOP[1]) * t + _GLOW[1] * glow
+            b = _BG_TOP[2] + (_BG_BOT[2] - _BG_TOP[2]) * t + _GLOW[2] * glow
+
+            # Simbolo sopra lo sfondo, con copertura sfumata sul bordo
+            cov = min(max(0.5 - _sd_euro(x / glyph_scale, y / glyph_scale)
+                          * glyph_scale / px_norm, 0.0), 1.0)
+            if cov > 0:
+                tf = (y + 1) / 2
+                r += (_FG_TOP[0] + (_FG_BOT[0] - _FG_TOP[0]) * tf - r) * cov
+                g += (_FG_TOP[1] + (_FG_BOT[1] - _FG_TOP[1]) * tf - g) * cov
+                b += (_FG_TOP[2] + (_FG_BOT[2] - _FG_TOP[2]) * tf - b) * cov
+
+            # Angoli arrotondati solo per l'icona non-maskable
+            if corner is not None:
+                out = min(max(0.5 + _sd_round_box(x, y, 1.0, 1.0, corner)
+                              / px_norm, 0.0), 1.0)
+                if out > 0:
+                    r *= 1 - out
+                    g *= 1 - out
+                    b *= 1 - out
+
+            ox = (ix // ss) * 3
+            arow[ox] += r
+            arow[ox + 1] += g
+            arow[ox + 2] += b
+
+    div = float(ss * ss)
     rows = []
-    for y in range(size):
+    for arow in acc:
         row = bytearray([0])  # filter byte: none
-        my = y * mh // size
-        line = _EURO_MASK[my]
-        for x in range(size):
-            row += bytes(_FG if line[x * mw // size] != "." else _BG)
+        row += bytes(min(255, int(v / div + 0.5)) for v in arow)
         rows.append(bytes(row))
 
     def chunk(tag: bytes, data: bytes) -> bytes:
@@ -86,16 +138,48 @@ def _png(size: int) -> bytes:
 
 
 _ICON_CACHE: dict = {}
+_ICON_LOCK = threading.Lock()
+
+
+def _icon_bytes(size: int, maskable: bool) -> bytes:
+    key = (size, maskable)
+    with _ICON_LOCK:
+        if key not in _ICON_CACHE:
+            _ICON_CACHE[key] = _render(size, maskable)
+        return _ICON_CACHE[key]
+
+
+def _warm_icons() -> None:
+    """Le icone sono uguali per sempre: si generano una volta all'avvio, cosi'
+    l'installazione sulla home non aspetta il rendering."""
+    for size in (192, 512):
+        for maskable in (False, True):
+            try:
+                _icon_bytes(size, maskable)
+            except Exception:
+                pass
+
+
+threading.Thread(target=_warm_icons, daemon=True).start()
 
 
 @router.get("/icon-{size}.png", include_in_schema=False)
 def icon(size: int):
     if size not in (192, 512):
         raise HTTPException(status_code=404, detail="Not found")
-    if size not in _ICON_CACHE:
-        _ICON_CACHE[size] = _png(size)
     return Response(
-        content=_ICON_CACHE[size],
+        content=_icon_bytes(size, maskable=False),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/icon-maskable-{size}.png", include_in_schema=False)
+def icon_maskable(size: int):
+    if size not in (192, 512):
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(
+        content=_icon_bytes(size, maskable=True),
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=86400"},
     )
@@ -121,18 +205,14 @@ def manifest():
                 }
             ],
             "icons": [
-                {
-                    "src": "/quick/icon-192.png",
-                    "sizes": "192x192",
-                    "type": "image/png",
-                    "purpose": "any maskable",
-                },
-                {
-                    "src": "/quick/icon-512.png",
-                    "sizes": "512x512",
-                    "type": "image/png",
-                    "purpose": "any maskable",
-                },
+                {"src": "/quick/icon-192.png", "sizes": "192x192",
+                 "type": "image/png", "purpose": "any"},
+                {"src": "/quick/icon-512.png", "sizes": "512x512",
+                 "type": "image/png", "purpose": "any"},
+                {"src": "/quick/icon-maskable-192.png", "sizes": "192x192",
+                 "type": "image/png", "purpose": "maskable"},
+                {"src": "/quick/icon-maskable-512.png", "sizes": "512x512",
+                 "type": "image/png", "purpose": "maskable"},
             ],
         },
         media_type="application/manifest+json",
