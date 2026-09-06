@@ -12,6 +12,7 @@ services:
     environment:
       - DB_PATH=/app/data/finance.duckdb
       - RULES_PATH=/app/data/rules.yaml
+      - INBOX_DIR=/app/data/inbox
     restart: unless-stopped
 
   finance_api:
@@ -20,7 +21,12 @@ services:
     ports:
       - "8502:8000"
     volumes:
+      # Il DB resta in sola lettura: l'API non scrive mai su DuckDB (lock del dashboard).
       - ./finance_data:/app/data:ro
+      # Coda degli inserimenti dal telefono, drenata dal dashboard all'avvio.
+      - ./finance_data/inbox:/app/inbox
     environment:
       - DB_PATH=/app/data/finance.duckdb
+      - RULES_PATH=/app/data/rules.yaml
+      - INBOX_DIR=/app/inbox
     restart: unless-stopped

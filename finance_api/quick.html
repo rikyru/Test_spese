@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Spese</title>
+<link rel="manifest" href="/quick/manifest.webmanifest">
+<link rel="icon" href="/quick/icon-192.png">
+<style>
+  :root{
+    --bg:#0f172a; --card:#1e293b; --card2:#334155; --line:#334155;
+    --txt:#f1f5f9; --dim:#94a3b8; --acc:#4ade80; --warn:#fbbf24; --bad:#f87171;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding:12px 12px calc(24px + env(safe-area-inset-bottom));
+    max-width:640px; margin-inline:auto;
+  }
+  h1{font-size:15px;font-weight:600;color:var(--dim);margin:0 0 10px;letter-spacing:.02em}
+  .totals{background:var(--card);border-radius:16px;padding:14px 16px;margin-bottom:14px}
+  .totals .big{font-size:32px;font-weight:700;line-height:1.1;letter-spacing:-.02em}
+  .totals .lbl{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  .row{display:flex;gap:14px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+  .row div{flex:1;min-width:0}
+  .row .v{font-size:17px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pos{color:var(--acc)} .neg{color:var(--bad)}
+  .cats{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+  .cats span{font-size:12px;color:var(--dim);background:var(--card2);border-radius:999px;padding:3px 9px}
+  .chips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .chip{
+    background:var(--card);border:1px solid var(--line);color:var(--txt);
+    border-radius:14px;padding:12px 12px;text-align:left;font:inherit;
+    min-height:64px;display:flex;flex-direction:column;justify-content:center;gap:2px;
+    min-width:0;overflow:hidden;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .chip:active{background:var(--card2)}
+  .chip b{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip small{color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .amt{color:var(--acc);font-weight:700}
+  button{font:inherit;-webkit-tap-highlight-color:transparent}
+  .full{width:100%;border:none;border-radius:14px;padding:15px;font-size:16px;font-weight:600}
+  .primary{background:var(--acc);color:#06240f}
+  .ghost{background:var(--card);color:var(--dim);border:1px solid var(--line)}
+  .primary:disabled{opacity:.5}
+  dialog{
+    border:none;border-radius:20px 20px 0 0;background:var(--card);color:var(--txt);
+    padding:18px 16px calc(18px + env(safe-area-inset-bottom));width:100%;max-width:640px;
+    margin:auto auto 0;position:fixed;inset:auto 0 0 0;
+  }
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  label{display:block;font-size:12px;color:var(--dim);margin:12px 0 5px;text-transform:uppercase;letter-spacing:.05em}
+  input,select{
+    width:100%;background:var(--bg);color:var(--txt);border:1px solid var(--line);
+    border-radius:12px;padding:13px;font:inherit;
+  }
+  input:focus,select:focus{outline:2px solid var(--acc);outline-offset:-1px}
+  #amount{font-size:30px;font-weight:700;text-align:center;padding:14px}
+  .seg{display:flex;gap:8px}
+  .seg button{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--dim);border-radius:12px;padding:11px}
+  .seg button[aria-pressed=true]{background:var(--card2);color:var(--txt);border-color:var(--acc)}
+  .two{display:flex;gap:8px}.two>*{flex:1;min-width:0}
+  .acts{display:flex;gap:8px;margin-top:18px}
+  .acts .full{flex:1}
+  .banner{border-radius:12px;padding:11px 13px;font-size:14px;margin-bottom:12px;display:block;text-decoration:none}
+  .b-warn{background:#422006;color:var(--warn);border:1px solid #78350f}
+  .b-ok{background:#052e16;color:var(--acc);border:1px solid #14532d}
+  .foot{margin-top:18px;text-align:center}
+  .foot a{color:var(--dim);font-size:14px;text-decoration:none;border-bottom:1px solid var(--line)}
+  .muted{color:var(--dim);font-size:13px;text-align:center;margin-top:10px}
+  #toast{
+    position:fixed;left:12px;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));
+    background:var(--acc);color:#06240f;border-radius:12px;padding:13px;text-align:center;
+    font-weight:600;max-width:616px;margin-inline:auto;transition:opacity .2s;z-index:10;
+  }
+  #toast[hidden]{display:none}
+</style>
+</head>
+<body>
+
+<div id="banner"></div>
+
+<section class="totals">
+  <div class="lbl">Speso questo mese</div>
+  <div class="big" id="t-exp">—</div>
+  <div class="row">
+    <div><div class="lbl">Entrate</div><div class="v pos" id="t-inc">—</div></div>
+    <div><div class="lbl">Saldo mese</div><div class="v" id="t-net">—</div></div>
+    <div><div class="lbl">Liquidità</div><div class="v" id="t-liq">—</div></div>
+  </div>
+  <div class="cats" id="t-cats"></div>
+</section>
+
+<h1>Aggiungi al volo</h1>
+<div class="chips" id="chips"></div>
+<button class="full ghost" style="margin-top:8px" id="btn-other">✏️ Altro / personalizza</button>
+
+<div class="foot">
+  <a href="/" target="_blank" rel="noopener">Apri il dashboard completo ↗</a>
+</div>
+
+<dialog id="sheet">
+  <form method="dialog" id="form">
+    <label for="amount">Importo €</label>
+    <input id="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00">
+
+    <div class="seg" style="margin-top:12px">
+      <button type="button" id="k-exp" aria-pressed="true">💸 Spesa</button>
+      <button type="button" id="k-inc" aria-pressed="false">💰 Entrata</button>
+    </div>
+
+    <label for="category">Categoria</label>
+    <input id="category" list="l-cats" autocomplete="off" placeholder="Generale">
+    <datalist id="l-cats"></datalist>
+
+    <div class="two">
+      <div>
+        <label for="tag">Tag</label>
+        <input id="tag" list="l-tags" autocomplete="off" placeholder="facoltativo">
+        <datalist id="l-tags"></datalist>
+      </div>
+      <div>
+        <label for="account">Conto</label>
+        <input id="account" list="l-accs" autocomplete="off">
+        <datalist id="l-accs"></datalist>
+      </div>
+    </div>
+
+    <label for="desc">Descrizione</label>
+    <input id="desc" autocomplete="off" placeholder="facoltativa">
+
+    <label for="date">Data</label>
+    <input id="date" type="date">
+
+    <div class="acts">
+      <button type="button" class="full ghost" id="cancel">Annulla</button>
+      <button type="button" class="full primary" id="save">Aggiungi</button>
+    </div>
+    <div class="muted">Categoria, necessità e tag mancanti li completano le regole.</div>
+  </form>
+</dialog>
+
+<div id="toast" hidden></div>
+
+<script>
+const API = '/quick/api';
+const QKEY = 'quick_outbox';
+const WKEY = 'quick_last_wallet';
+const $ = id => document.getElementById(id);
+const eur = n => (n ?? 0).toLocaleString('it-IT', {style:'currency', currency:'EUR', maximumFractionDigits:0});
+
+let boot = null, kind = 'Expense';
+
+// ── Coda offline ──────────────────────────────────────────────────────────
+const outbox = {
+  all:  () => { try { return JSON.parse(localStorage.getItem(QKEY)) || []; } catch { return []; } },
+  save: v  => { try { localStorage.setItem(QKEY, JSON.stringify(v)); } catch {} },
+  add:  e  => outbox.save([...outbox.all(), e]),
+  drop: id => outbox.save(outbox.all().filter(e => e.id !== id)),
+};
+
+function banner(html, cls) {
+  $('banner').innerHTML = html ? `<div class="banner ${cls}">${html}</div>` : '';
+}
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg; t.hidden = false; t.style.opacity = 1;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.style.opacity = 0; setTimeout(() => t.hidden = true, 200); }, 2200);
+}
+
+/** Con Cloudflare Access davanti, una sessione scaduta risponde con l'HTML del
+ *  login invece del JSON: va distinta da un errore vero, altrimenti sembra un bug. */
+async function call(path, opts) {
+  const res = await fetch(path, {credentials: 'same-origin', ...opts});
+  const ct = res.headers.get('content-type') || '';
+  if (res.redirected || !ct.includes('application/json')) {
+    const err = new Error('session'); err.session = true; throw err;
+  }
+  if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+  return res.json();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function renderTotals(t) {
+  $('t-exp').textContent = eur(t.expenses);
+  $('t-inc').textContent = eur(t.income);
+  $('t-liq').textContent = eur(t.liquidity);
+  const net = $('t-net');
+  net.textContent = eur(t.net);
+  net.className = 'v ' + (t.net >= 0 ? 'pos' : 'neg');
+  $('t-cats').innerHTML = (t.top_categories || [])
+    .map(c => `<span>${esc(c.name)} ${eur(c.total)}</span>`).join('');
+  const q = outbox.all().length;
+  if (t.pending || q) {
+    const parts = [];
+    if (t.pending) parts.push(`${t.pending} in coda, entrano nel dashboard al prossimo avvio`);
+    if (q) parts.push(`${q} da inviare (offline)`);
+    banner('⏳ ' + parts.join(' · '), 'b-warn');
+  } else banner('');
+}
+
+const esc = s => String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+
+function renderChips(combos) {
+  $('chips').innerHTML = combos.map((c, i) =>
+    `<button class="chip" data-i="${i}">
+       <b>${esc(c.category)}</b>
+       <small>#${esc(c.tag)} · <span class="amt">${eur(c.amount)}</span></small>
+     </button>`).join('');
+  $('chips').querySelectorAll('.chip').forEach(el =>
+    el.onclick = () => openSheet(combos[el.dataset.i]));
+}
+
+function fillList(id, items) {
+  $(id).innerHTML = items.map(v => `<option value="${esc(v)}">`).join('');
+}
+
+// ── Form ──────────────────────────────────────────────────────────────────
+function setKind(k) {
+  kind = k;
+  $('k-exp').setAttribute('aria-pressed', k === 'Expense');
+  $('k-inc').setAttribute('aria-pressed', k === 'Income');
+}
+
+function openSheet(tpl) {
+  setKind('Expense');
+  $('amount').value = tpl ? String(tpl.amount).replace('.', ',') : '';
+  $('category').value = tpl ? tpl.category : '';
+  $('tag').value = tpl ? tpl.tag : '';
+  $('desc').value = '';
+  $('date').value = (boot && boot.today) || new Date().toISOString().slice(0, 10);
+  $('account').value = localStorage.getItem(WKEY) || (boot && boot.main_wallet) || '';
+  $('sheet').showModal();
+  const a = $('amount');
+  a.focus(); a.select();
+}
+
+async function submit() {
+  const amount = parseFloat($('amount').value.replace(',', '.'));
+  if (!amount || amount <= 0) { toast('Importo mancante'); $('amount').focus(); return; }
+
+  const tag = $('tag').value.trim();
+  const entry = {
+    id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)),
+    amount: Math.round(amount * 100) / 100,
+    type: kind,
+    date: $('date').value || null,
+    category: $('category').value.trim() || null,
+    account: $('account').value.trim() || null,
+    description: $('desc').value.trim(),
+    tags: tag ? [tag] : [],
+  };
+  if (entry.account) localStorage.setItem(WKEY, entry.account);
+
+  $('save').disabled = true;
+  $('sheet').close();
+  try {
+    const r = await send(entry);
+    renderTotals(r.totals);
+    toast(`${kind === 'Expense' ? 'Spesa' : 'Entrata'} di ${eur(entry.amount)} aggiunta`);
+  } catch (e) {
+    outbox.add(entry);
+    if (e.session) {
+      banner('🔒 Sessione scaduta — <a href="/quick" style="color:inherit">tocca per rientrare</a>. La spesa è salvata sul telefono e parte da sola.', 'b-warn');
+    } else {
+      banner(`📵 Offline: ${outbox.all().length} spese salvate sul telefono, partono appena torna la rete.`, 'b-warn');
+    }
+    toast('Salvata sul telefono');
+  } finally {
+    $('save').disabled = false;
+  }
+}
+
+const send = entry => call(API + '/transaction', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify(entry),
+});
+
+async function flushOutbox() {
+  let last = null;
+  for (const e of outbox.all()) {
+    try { last = await send(e); outbox.drop(e.id); }
+    catch { return last; }   // ancora offline o sessione scaduta: riprova dopo
+  }
+  return last;
+}
+
+// ── Avvio ─────────────────────────────────────────────────────────────────
+async function load() {
+  try {
+    const flushed = await flushOutbox();
+    boot = await call(API + '/bootstrap');
+    renderChips(boot.combos);
+    fillList('l-cats', boot.categories);
+    fillList('l-tags', boot.tags);
+    fillList('l-accs', boot.accounts);
+    renderTotals(flushed ? flushed.totals : boot.totals);
+    // /quick#new apre subito il modulo: usabile come secondo collegamento in home
+    if (location.hash === '#new' && !$('sheet').open) openSheet(null);
+  } catch (e) {
+    if (e.session) {
+      banner('🔒 Sessione scaduta — <a href="/quick" style="color:inherit">tocca per rientrare</a>.', 'b-warn');
+    } else {
+      banner('📵 Nessuna connessione: puoi comunque aggiungere, resta in coda sul telefono.', 'b-warn');
+    }
+  }
+}
+
+$('btn-other').onclick = () => openSheet(null);
+$('cancel').onclick = () => $('sheet').close();
+$('save').onclick = submit;
+$('k-exp').onclick = () => setKind('Expense');
+$('k-inc').onclick = () => setKind('Income');
+$('form').onsubmit = ev => { ev.preventDefault(); submit(); };
+addEventListener('online', load);
+addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+load();
+</script>
+</body>
+</html>

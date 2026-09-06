@@ -452,3 +452,12 @@ def health():
         return {"status": "ok", "transactions": count}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# PAGINA RAPIDA MOBILE (/quick)
+# ---------------------------------------------------------------------------
+
+from quick import build_router  # noqa: E402  (dopo la definizione di get_con)
+
+app.include_router(build_router(get_con))

@@ -1,7 +1,9 @@
 import duckdb
 import pandas as pd
 import zipfile
+import json
 import os
+import uuid
 from .utils import clean_currency, normalize_tags
 from .rules_engine import RulesEngine
 
@@ -1052,7 +1054,8 @@ class DataManager:
 
     def add_transaction(self, date, amount, ttype, category, account,
                         description='', tags=None, necessity=None,
-                        currency='EUR', apply_rules=True):
+                        currency='EUR', apply_rules=True,
+                        source='manual_entry', tx_id=None):
         """
         Insert a single manual transaction.
 
@@ -1128,10 +1131,106 @@ class DataManager:
             INSERT INTO transactions
                 (id, date, amount, currency, account, category, tags, description,
                  type, source_file, original_description, necessity)
-            VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?, ?, 'manual_entry', ?, ?)
-        """, [date, amt, currency, account, final_category, final_tags, description,
-              ttype, description, final_necessity])
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [tx_id or str(uuid.uuid4()), date, amt, currency, account, final_category,
+              final_tags, description, ttype, source, description, final_necessity])
         return True
+
+    # ------------------------------------------------------------------
+    # Inbox mobile (pagina rapida /quick)
+    # ------------------------------------------------------------------
+    def _inbox_paths(self):
+        """Cartella coda condivisa con finance_api: DuckDB non ammette due writer,
+        quindi la pagina mobile accoda su file e qui si travasa nel DB."""
+        base = os.getenv("INBOX_DIR") or os.path.join(
+            os.path.dirname(os.path.abspath(self.db_path)), "inbox"
+        )
+        return (
+            base,
+            os.path.join(base, "inbox.jsonl"),
+            os.path.join(base, "inbox_archive.jsonl"),
+        )
+
+    def drain_inbox(self):
+        """
+        Importa nel DB le transazioni accodate dalla pagina mobile e restituisce
+        quante ne ha inserite.
+
+        La coda viene prima rinominata in `.processing` (atomico), cosi' l'API puo'
+        continuare ad accodare su un file nuovo senza perdere righe. L'id della
+        transazione e' l'id generato dal client, quindi un doppio invio o un drain
+        interrotto a meta' non creano duplicati.
+        """
+        _, inbox, archive = self._inbox_paths()
+        staging = inbox + ".processing"
+        try:
+            if os.path.exists(inbox):
+                if os.path.exists(staging):
+                    # Drain precedente interrotto: accoda i nuovi in fondo ai residui
+                    with open(staging, "a", encoding="utf-8") as dst, \
+                            open(inbox, encoding="utf-8") as src:
+                        dst.write(src.read())
+                    os.remove(inbox)
+                else:
+                    os.replace(inbox, staging)
+            if not os.path.exists(staging):
+                return 0
+            with open(staging, encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+        except OSError:
+            return 0
+
+        entries = []
+        for ln in lines:
+            try:
+                entries.append(json.loads(ln))
+            except ValueError:
+                continue
+
+        ids = [str(e.get("id")) for e in entries if e.get("id")]
+        already = set()
+        if ids:
+            try:
+                placeholders = ",".join("?" * len(ids))
+                already = {
+                    r[0] for r in self.con.execute(
+                        f"SELECT id FROM transactions WHERE id IN ({placeholders})", ids
+                    ).fetchall()
+                }
+            except Exception:
+                already = set()
+
+        inserted = 0
+        for e in entries:
+            eid = str(e.get("id") or uuid.uuid4())
+            if eid in already:
+                continue
+            try:
+                self.add_transaction(
+                    date=pd.to_datetime(e.get("date")).date(),
+                    amount=float(e.get("amount")),
+                    ttype=e.get("type") or "Expense",
+                    category=e.get("category") or "Generale",
+                    account=e.get("account") or (self.get_main_wallet() or "Contanti"),
+                    description=e.get("description") or "",
+                    tags=list(e.get("tags") or []),
+                    necessity=e.get("necessity") or None,
+                    source="quick_mobile",
+                    tx_id=eid,
+                )
+                already.add(eid)
+                inserted += 1
+            except Exception:
+                continue
+
+        try:
+            with open(archive, "a", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(ln + "\n")
+            os.remove(staging)
+        except OSError:
+            pass
+        return inserted
 
     def _necessity_from_rules(self, category, tags):
         """Derives Need/Want from category & tag necessity rules (defaults to Want)."""

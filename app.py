@@ -33,6 +33,15 @@ if 'recurring_autogen' not in st.session_state:
         st.session_state['recurring_autogen_count'] = 0
     st.session_state['recurring_autogen'] = True
 
+# Spese inviate dal telefono (pagina rapida /quick): la coda su file viene
+# travasata qui, perche' solo questo processo puo' scrivere su DuckDB.
+if 'inbox_drained' not in st.session_state:
+    try:
+        st.session_state['inbox_count'] = int(dm.drain_inbox() or 0)
+    except Exception:
+        st.session_state['inbox_count'] = 0
+    st.session_state['inbox_drained'] = True
+
 # Backup automatico giornaliero (una volta per sessione)
 if 'auto_backup_done' not in st.session_state:
     try:
@@ -47,6 +56,10 @@ st.sidebar.title("💰 Finance App")
 if st.session_state.get('recurring_autogen_count'):
     st.sidebar.success(f"🔁 Generate {st.session_state['recurring_autogen_count']} ricorrenti dovute.")
     st.session_state['recurring_autogen_count'] = 0
+
+if st.session_state.get('inbox_count'):
+    st.sidebar.success(f"📱 Importate {st.session_state['inbox_count']} spese dal telefono.")
+    st.session_state['inbox_count'] = 0
 
 # Alert ricorrenti/bollette in arrivo (prossimi 7 giorni)
 try:
@@ -73,6 +86,17 @@ if global_search:
     page = "Transactions"
 
 st.sidebar.divider()
+
+# Recupero manuale: utile se hai appena inserito dal telefono con il dashboard aperto
+if st.sidebar.button("📱 Sincronizza spese dal telefono", use_container_width=True):
+    try:
+        _n = dm.drain_inbox()
+        st.toast(f"Importate {_n} spese dal telefono." if _n else "Nessuna spesa in coda.",
+                 icon="📱")
+        if _n:
+            st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Errore inbox: {e}")
 
 # ── Add Transaction (Quick Add) ──────────────────────────────────────────
 main_wallet = dm.get_main_wallet()
