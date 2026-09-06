@@ -163,23 +163,23 @@ def _warm_icons() -> None:
 threading.Thread(target=_warm_icons, daemon=True).start()
 
 
-@router.get("/icon-{size}.png", include_in_schema=False)
-def icon(size: int):
-    if size not in (192, 512):
-        raise HTTPException(status_code=404, detail="Not found")
-    return Response(
-        content=_icon_bytes(size, maskable=False),
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
-
-
 @router.get("/icon-maskable-{size}.png", include_in_schema=False)
 def icon_maskable(size: int):
     if size not in (192, 512):
         raise HTTPException(status_code=404, detail="Not found")
     return Response(
         content=_icon_bytes(size, maskable=True),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/icon-{size}.png", include_in_schema=False)
+def icon(size: int):
+    if size not in (192, 512):
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(
+        content=_icon_bytes(size, maskable=False),
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=86400"},
     )
