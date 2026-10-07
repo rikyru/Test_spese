@@ -412,19 +412,27 @@ def render_split(data_manager: DataManager):
         # Generatore Messaggio
         st.subheader("📲 WhatsApp Export")
         
-        msg_lines = [f"📊 *Riassunto Spese {sel_month}/{sel_year}*"]
-        if net_owed >= 0:
-            msg_lines.append(f"Saldo: mi devi *€{net_owed:,.2f}*")
+        msg_lines = [f"📊 *Conti {sel_month}/{sel_year}*", ""]
+        # Saldo in testa, chiaro e direzionale
+        if abs(net_owed) < 0.01:
+            msg_lines.append("✅ *Siamo pari!*")
+        elif net_owed > 0:
+            msg_lines.append(f"➡️ *Mi devi €{net_owed:,.2f}*")
         else:
-            msg_lines.append(f"Saldo: ti devo *€{abs(net_owed):,.2f}*")
-        if partner_paid_total > 0 or partner_loan_bal:
-            _b = f"(spese condivise €{total_partner_owes:,.2f}"
-            if partner_paid_total > 0:
-                _b += f" − tua quota su spese che hai pagato tu €{partner_paid_total:,.2f}"
-            if partner_loan_bal:
-                _b += f" {'+' if partner_loan_bal >= 0 else '−'} prestiti aperti €{abs(partner_loan_bal):,.2f}"
-            _b += ")"
-            msg_lines.append(_b)
+            msg_lines.append(f"➡️ *Ti devo €{abs(net_owed):,.2f}*")
+        msg_lines.append("")
+        # Scomposizione a voci (perché quel saldo)
+        msg_lines.append("🧾 *Come si arriva al saldo:*")
+        msg_lines.append(f"• Tua quota delle spese condivise: +€{total_partner_owes:,.2f}")
+        if partner_paid_total > 0:
+            msg_lines.append(f"• Mia quota su spese che hai pagato tu: −€{partner_paid_total:,.2f}")
+        if partner_loan_bal:
+            if partner_loan_bal > 0:
+                msg_lines.append(f"• Prestiti che ti ho fatto (ancora aperti): +€{partner_loan_bal:,.2f}")
+            else:
+                msg_lines.append(f"• Prestiti che mi hai fatto (ancora aperti): −€{abs(partner_loan_bal):,.2f}")
+        msg_lines.append("━━━━━━━━")
+        msg_lines.append(f"*Totale: €{net_owed:,.2f}*")
         msg_lines.append("")
         
         if split_transactions:
@@ -478,7 +486,25 @@ def render_split(data_manager: DataManager):
                 d_str = t['date'].strftime('%d/%m') if hasattr(t['date'], 'strftime') else str(t['date'])[:10]
                 msg_lines.append(f"- {d_str} {t['description']}: €{abs(t['amount']):.2f}")
 
-        st.text_area("Copia questo messaggio", "\n".join(msg_lines), height=300)
+        # Dettaglio prestiti ancora aperti col partner (la "questione debiti")
+        if not pl_detail.empty:
+            _plg = pl_detail.groupby('name').apply(
+                lambda x: pd.Series({
+                    'prestato': x.loc[x['source_file'] == 'loan', 'amount'].sum(),
+                    'restituito': -x.loc[x['source_file'] == 'loan_repay', 'amount'].sum(),
+                })
+            ).reset_index()
+            _plg['aperto'] = _plg['prestato'] - _plg['restituito']
+            _open = _plg[_plg['aperto'].abs() > 0.01]
+            if not _open.empty:
+                msg_lines.append("")
+                msg_lines.append("💸 *Prestiti ancora aperti:*")
+                for _, r in _open.iterrows():
+                    msg_lines.append(f"- {r['name']}: €{r['aperto']:,.2f} (prestato €{r['prestato']:,.0f}, reso €{r['restituito']:,.0f})")
+
+        # st.code: ha il tasto copia e NON usa il componente TextArea (evita l'errore di import)
+        st.code("\n".join(msg_lines).strip(), language=None)
+        st.caption("Tocca l'icona 📋 in alto a destra del riquadro per copiare.")
 
     # --- PRESTITI / CREDITI TAB ---
     with tab_loans:
