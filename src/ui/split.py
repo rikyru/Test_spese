@@ -501,12 +501,7 @@ def render_split(data_manager: DataManager):
                 msg_lines.append("")
                 msg_lines.append("💸 *Prestiti ancora aperti:*")
                 for _, r in _open.iterrows():
-                    msg_lines.append(f"▸ *{r['name']}* — aperto €{r['aperto']:,.2f}  (prestato €{r['prestato']:,.0f}, reso €{r['restituito']:,.0f})")
-                    movs = _pl[_pl['name'] == r['name']].sort_values('date')
-                    for _, mv in movs.iterrows():
-                        d_str = pd.to_datetime(mv['date']).strftime('%d/%m/%y')
-                        verbo = '➖ prestato' if mv['source_file'] == 'loan' else '➕ reso'
-                        msg_lines.append(f"   • {d_str} {verbo} €{abs(mv['amount']):,.2f}")
+                    msg_lines.append(f"▸ {r['name']}: €{r['aperto']:,.2f}")
 
         # st.code: ha il tasto copia e NON usa il componente TextArea (evita l'errore di import)
         st.code("\n".join(msg_lines).strip(), language=None)
