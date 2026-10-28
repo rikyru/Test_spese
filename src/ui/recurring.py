@@ -232,43 +232,48 @@ def render_recurring(data_manager: DataManager):
 
 
 
-            # Limits / Termination
-            st.markdown("#### Duration limits (Optional)")
-            r_duration_type = st.radio("Stop condition", ["Indefinite (Forever)", "Fixed Installments (Rate)", "Until Date (Ends on)"], horizontal=True, index=0)
-            
+            # Durata / rate — campi SEMPRE visibili: dentro un st.form un radio non
+            # rerenderizza, quindi i campi condizionali non comparirebbero mai.
+            st.markdown("#### Durata / Rate (opzionale)")
+            dc1, dc2, dc3 = st.columns(3)
+            r_inst_total = dc1.number_input("Rate totali (0 = indefinita)", min_value=0, value=0, step=1,
+                                            help="Es. acquisto a 5 rate → metti 5. Lascia 0 se è sempre attiva (abbonamento).")
+            r_inst_paid = dc2.number_input("Rate già pagate", min_value=0, value=0, step=1,
+                                           help="Quante rate hai già versato (per la barra di avanzamento).")
+            r_end_date_in = dc3.date_input("Scade il (opzionale)", value=None,
+                                           help="Alternativa alle rate: non genera oltre questa data.")
+
             r_installments = None
             r_installments_total = None
             r_end_date = None
-
-            if r_duration_type == "Fixed Installments (Rate)":
-                ci1, ci2 = st.columns(2)
-                r_inst_total = ci1.number_input("Rate totali", min_value=1, value=4, step=1)
-                r_inst_paid = ci2.number_input("Rate già pagate", min_value=0, value=0, step=1)
+            if r_inst_total and int(r_inst_total) > 0:
                 r_installments = max(int(r_inst_total) - int(r_inst_paid), 0)
                 r_installments_total = int(r_inst_total)
-                st.caption(f"Rimangono {r_installments} rate su {r_inst_total} (es. condominio: totale 4, già pagate 2).")
-            elif r_duration_type == "Until Date (Ends on)":
-                r_end_date = st.date_input("End Date (Inclusive)")
-                st.caption("Will stop generating after this date.")
+                st.caption(f"➜ A rate: ne restano **{r_installments}** su {int(r_inst_total)}.")
+            else:
+                r_end_date = r_end_date_in
 
             st.markdown("#### Details")
             r_desc = st.text_input("Description for Transaction", placeholder="e.g. Monthly subscription payment")
             
-            # Tags handling
+            # Tags: un solo campo che accetta sia tag esistenti sia NUOVI (scrivi e Invio)
             existing_tags = data_manager.get_unique_tags()
-            r_tags_sel = st.multiselect("Tags", existing_tags, placeholder="Select tags...")
-            r_new_tag = st.text_input("Add New Tag (Optional)", placeholder="e.g. #subscription")
-            
+            r_tags_sel = st.multiselect(
+                "Tags", existing_tags, accept_new_options=True,
+                placeholder="Scegli o scrivi un tag e premi Invio",
+                help="Per un tag nuovo: scrivilo e premi Invio (poi Salva).",
+            )
+
             submitted = st.form_submit_button("Save Template")
-            
+
             if submitted:
                 if not r_name:
                     st.error("Name is required.")
                 else:
-                    # Merge tags
-                    final_tags = r_tags_sel
-                    if r_new_tag:
-                        clean = r_new_tag.strip().replace('#', '').lower()
+                    # Normalizza i tag (minuscolo, senza #), esistenti + nuovi
+                    final_tags = []
+                    for t in r_tags_sel:
+                        clean = str(t).strip().replace('#', '').lower()
                         if clean and clean not in final_tags:
                             final_tags.append(clean)
                     
