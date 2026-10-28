@@ -61,21 +61,37 @@ def render_split(data_manager: DataManager):
         # Rule Editor
         rules_list = conf.get('rules', [])
         
-        # Display existing rules
+        # Regole esistenti — modificabili inline (match + mia quota %)
+        if rules_list:
+            hh = st.columns([1.2, 3, 2, 1.3])
+            hh[0].caption("Tipo"); hh[1].caption("Match"); hh[2].caption("Mia quota %"); hh[3].caption("Azioni")
         for i, rule in enumerate(rules_list):
-            c1, c2, c3, c4 = st.columns([2, 3, 2, 1])
-            with c1:
-                st.write(f"**{rule['type'].capitalize()}**")
-            with c2:
-                st.write(f"`{rule['match']}`")
-            with c3:
-                st.write(f"My Share: **{rule['my_share']}%**")
-            with c4:
-                if st.button("🗑️", key=f"del_rule_{i}"):
-                    rules_list.pop(i)
+            c1, c2, c3, c4 = st.columns([1.2, 3, 2, 1.3])
+            c1.markdown(f"**{rule['type'].capitalize()}**")
+            new_match = c2.text_input("match", value=str(rule.get('match', '')),
+                                      key=f"rule_match_{i}", label_visibility="collapsed")
+            new_share = c3.number_input("share", min_value=0, max_value=100,
+                                        value=int(rule.get('my_share', 50)),
+                                        key=f"rule_share_{i}", label_visibility="collapsed")
+            bc1, bc2 = c4.columns(2)
+            if bc1.button("💾", key=f"save_rule_{i}", help="Salva modifica"):
+                m = new_match.strip()
+                if rule.get('type') == 'tag':
+                    m = m.replace('#', '').lower()
+                if m:
+                    rule['match'] = m
+                    rule['my_share'] = int(new_share)
                     conf['rules'] = rules_list
                     rules_engine.save_rules(full_rules)
+                    st.toast("Regola aggiornata ✅")
                     st.rerun()
+                else:
+                    st.warning("Il campo match non può essere vuoto.")
+            if bc2.button("🗑️", key=f"del_rule_{i}", help="Elimina"):
+                rules_list.pop(i)
+                conf['rules'] = rules_list
+                rules_engine.save_rules(full_rules)
+                st.rerun()
                     
         # Add New Rule Form
         with st.expander("➕ Add New Rule"):
