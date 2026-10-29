@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from src.data_manager import DataManager
-from src.utils import SUBSCRIPTION_TAGS
+from src.utils import SUBSCRIPTION_TAGS, liquid_balance
 
 
 # ---------------------------------------------------------------------------
@@ -718,6 +718,11 @@ def render_tag_analysis(df):
     # Monthly trend
     expenses_only['month_year'] = expenses_only['date'].dt.to_period('M')
     monthly_tag = expenses_only.groupby('month_year')['abs_amount'].sum().reset_index()
+    _ip = in_progress_period(df)
+    if _ip is not None and (monthly_tag['month_year'] == _ip).any():
+        _now = float(monthly_tag.loc[monthly_tag['month_year'] == _ip, 'abs_amount'].sum())
+        monthly_tag = monthly_tag[monthly_tag['month_year'] != _ip]   # trend su mesi completi
+        st.caption(f"Mese in corso ({_ip}) escluso dal trend — finora €{_now:,.0f}.")
     monthly_tag['month_str'] = monthly_tag['month_year'].astype(str)
 
     fig_trend = go.Figure()
@@ -991,6 +996,9 @@ def render_forecasting(df, full_df=None, data_manager=None):
                    .groupby([pd.Grouper(key='date', freq='ME'), 'category'])['amount']
                    .sum().abs().reset_index())
     cat_monthly.columns = ['date', 'category', 'amount']
+    if ip is not None:   # mese in corso parziale escluso, come nella previsione totale
+        cat_monthly = cat_monthly[cat_monthly['date'].dt.to_period('M') != ip]
+    st.caption("Basata sugli ultimi mesi completi (mese in corso escluso).")
 
     cat_forecasts = []
     for cat in cat_monthly['category'].dropna().unique():
@@ -1685,6 +1693,12 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
 
     cat_df = exp_all[exp_all['category'] == sel]
     monthly = cat_df.groupby('month_year')['abs_amount'].sum().sort_index()
+    # Statistiche/trend/aderenza sui mesi COMPLETI: il mese in corso parziale
+    # risulterebbe sempre "basso" (e sempre entro budget).
+    _ip = in_progress_period(full_df)
+    partial_now = float(monthly.get(_ip, 0.0)) if _ip is not None else 0.0
+    if _ip is not None:
+        monthly = monthly.drop(_ip, errors='ignore')
 
     total = cat_df['abs_amount'].sum()
     avg_month = monthly.mean() if len(monthly) else 0
@@ -1693,8 +1707,8 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Totale (all-time)", f"€{total:,.0f}")
-    c2.metric("Media Mensile", f"€{avg_month:,.0f}")
-    c3.metric("Ultimo Mese", f"€{last:,.0f}")
+    c2.metric("Media Mensile", f"€{avg_month:,.0f}", help="Mesi completi, mese in corso escluso")
+    c3.metric("Ultimo mese completo", f"€{last:,.0f}")
     if budget > 0:
         over = last - budget
         c4.metric("Budget Mensile", f"€{budget:,.0f}",
@@ -1730,6 +1744,9 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
                       hovermode='x unified', title=f"Andamento mensile — {sel}",
                       legend=dict(orientation='h', yanchor='bottom', y=1.02))
     st.plotly_chart(fig, use_container_width=True)
+    if _ip is not None and partial_now > 0:
+        _bud_txt = f" su €{budget:,.0f} di budget ({partial_now / budget * 100:.0f}%)" if budget > 0 else ""
+        st.caption(f"Mese in corso ({_ip}), finora: €{partial_now:,.0f}{_bud_txt} — escluso da medie e trend.")
 
     # Aderenza al budget per la categoria selezionata
     if budget > 0 and len(monthly) >= 1:
@@ -1799,6 +1816,8 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
     rows = []
     for cat, b in budgeted.items():
         cm = exp_all[exp_all['category'] == cat].groupby('month_year')['abs_amount'].sum()
+        if _ip is not None:
+            cm = cm.drop(_ip, errors='ignore')   # il mese parziale sarebbe sempre "entro budget"
         if cm.empty:
             continue
         within = int((cm <= b).sum())
@@ -1841,18 +1860,25 @@ def render_financial_health(full_df, data_manager):
     exp['my'] = exp['date'].dt.to_period('M')
     inc['my'] = inc['date'].dt.to_period('M')
 
+    # Mesi COMPLETI per medie/statistiche (il mese in corso parziale le falserebbe)
+    _ip = in_progress_period(df)
     monthly_exp = exp.groupby('my')['abs_amount'].sum().sort_index()
     monthly_inc = inc.groupby('my')['amount'].sum().sort_index()
-    net_worth = df['amount'].sum()          # patrimonio netto (include saldo iniziale)
+    if _ip is not None:
+        monthly_exp = monthly_exp.drop(_ip, errors='ignore')
+        monthly_inc = monthly_inc.drop(_ip, errors='ignore')
+    net_worth = df['amount'].sum()          # patrimonio netto (include crediti/debiti virtuali)
+    liquidity = liquid_balance(df)          # solo denaro spendibile
     avg_exp_12 = monthly_exp.tail(12).mean()
 
     # ===== A. FONDO EMERGENZA =====
     st.markdown("### 🛟 Fondo Emergenza")
-    runway = net_worth / avg_exp_12 if avg_exp_12 > 0 else 0
+    runway = liquidity / avg_exp_12 if avg_exp_12 > 0 else 0
 
     a1, a2, a3 = st.columns(3)
-    a1.metric("Patrimonio Netto", f"€{net_worth:,.0f}")
-    a2.metric("Spesa Media/Mese (12m)", f"€{avg_exp_12:,.0f}")
+    a1.metric("Liquidità spendibile", f"€{liquidity:,.0f}",
+              help=f"Esclusi i conti virtuali (Partner, Prestiti). Patrimonio netto totale: €{net_worth:,.0f}")
+    a2.metric("Spesa Media/Mese (12m)", f"€{avg_exp_12:,.0f}", help="Mesi completi, mese in corso escluso")
     a3.metric("Autonomia (Runway)", f"{runway:.1f} mesi")
 
     gmax = max(12, runway * 1.2)
@@ -1961,6 +1987,8 @@ def render_financial_health(full_df, data_manager):
 
     exp2 = exp.copy()
     exp2['tipo'] = exp2.apply(lambda r: 'Fissa' if _is_fixed(r) else 'Variabile', axis=1)
+    if _ip is not None:
+        exp2 = exp2[exp2['my'] != _ip]            # grafico e quote su mesi completi
     fv = exp2.groupby(['my', 'tipo'])['abs_amount'].sum().reset_index()
     fv['mese'] = fv['my'].astype(str)
     fig_fv = px.area(fv, x='mese', y='abs_amount', color='tipo',
@@ -2004,6 +2032,8 @@ def render_financial_health(full_df, data_manager):
         st.caption("Nessuna spesa con tag di servizio in abbonamento.")
     else:
         sm = subs.groupby('my')['abs_amount'].sum().sort_index()
+        if _ip is not None:
+            sm = sm.drop(_ip, errors='ignore')   # trend solo su mesi completi
         sm_df = sm.reset_index()
         sm_df['mese'] = sm_df['my'].astype(str)
         fig_s = px.bar(sm_df, x='mese', y='abs_amount', title="Costo Abbonamenti/Mese",
@@ -2037,7 +2067,7 @@ def render_commitments_calendar(full_df, data_manager):
     df['date'] = pd.to_datetime(df['date'])
     today = date_type.today()
     cy = today.year
-    net_worth = df['amount'].sum()
+    net_worth = liquid_balance(df)   # parte dalla liquidità spendibile (esclusi conti virtuali)
 
     exp = real_expenses(df).copy()
     exp['abs'] = exp['amount'].abs()

@@ -12,6 +12,17 @@ SUBSCRIPTION_TAGS = {
     'audible', 'xbox', 'game pass', 'playstation', 'psplus', 'crunchyroll', 'mubi',
 }
 
+# Conti VIRTUALI: rappresentano crediti/debiti (quote del partner, prestiti fatti),
+# non denaro spendibile. Restano nel patrimonio netto ma NON nella liquidità.
+VIRTUAL_ACCOUNTS = {'Partner', 'Prestiti'}
+
+
+def liquid_balance(df):
+    """Liquidità spendibile: somma dei saldi esclusi i conti virtuali."""
+    if df is None or df.empty:
+        return 0.0
+    return float(df.loc[~df['account'].isin(VIRTUAL_ACCOUNTS), 'amount'].sum())
+
 
 def clean_currency(amount_str):
     """Ensures amount is a float."""

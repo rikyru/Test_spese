@@ -8,6 +8,7 @@ import calendar
 from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
 from src.ui.analysis import real_income, real_expenses, in_progress_period
+from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
 
 def render_dashboard(data_manager):
     st.header("Dashboard")
@@ -161,17 +162,34 @@ def render_dashboard(data_manager):
 
         if not full_df.empty:
             # Calculate balance per account
-            balances = full_df.groupby('account')['amount'].sum().reset_index()
-            total_liquidity = balances['amount'].sum()
-            
+            all_balances = full_df.groupby('account')['amount'].sum().reset_index()
+            # Conti virtuali (Partner, Prestiti) = crediti/debiti, NON liquidità spendibile
+            virtual_bal = all_balances[all_balances['account'].isin(VIRTUAL_ACCOUNTS)]
+            balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS)].reset_index(drop=True)
+            total_liquidity = liquid_balance(full_df)
+
             # --- Total Liquidity Big Card ---
             st.markdown(f"""
             <div style="padding: 20px; border-radius: 10px; background: linear-gradient(90deg, #4CAF50 0%, #2E7D32 100%); color: white; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                <h3 style="margin:0; font-size: 1.2rem; opacity: 0.9;">Total Liquidity</h3>
+                <h3 style="margin:0; font-size: 1.2rem; opacity: 0.9;">Liquidità disponibile</h3>
                 <h1 style="margin:0; font-size: 2.5rem;">€ {total_liquidity:,.2f}</h1>
             </div>
             """, unsafe_allow_html=True)
-            
+
+            # --- Crediti / debiti (conti virtuali, non spendibili) ---
+            virtual_bal = virtual_bal[virtual_bal['amount'].abs() > 0.005]
+            if not virtual_bal.empty:
+                vcols = st.columns(len(virtual_bal))
+                for vc, (_, vr) in zip(vcols, virtual_bal.iterrows()):
+                    if vr['account'] == 'Prestiti':
+                        vc.metric("💸 Prestiti da ricevere", f"€{vr['amount']:,.2f}",
+                                  help="Soldi prestati non ancora restituiti. Non conteggiati nella liquidità.")
+                    else:
+                        lbl = "🤝 Partner: ti deve" if vr['amount'] > 0 else "🤝 Partner: gli devi"
+                        vc.metric(lbl, f"€{abs(vr['amount']):,.2f}",
+                                  help="Conto virtuale col partner (quote/prestiti registrati). "
+                                       "Il saldo completo è in Spese Condivise. Non conteggiato nella liquidità.")
+
             # --- Wallet Grid ---
             if not balances.empty:
                 st.write("##### Active Wallets")
