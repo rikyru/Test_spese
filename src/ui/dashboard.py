@@ -176,19 +176,19 @@ def render_dashboard(data_manager):
             </div>
             """, unsafe_allow_html=True)
 
-            # --- Crediti / debiti (conti virtuali, non spendibili) ---
-            virtual_bal = virtual_bal[virtual_bal['amount'].abs() > 0.005]
-            if not virtual_bal.empty:
-                vcols = st.columns(len(virtual_bal))
-                for vc, (_, vr) in zip(vcols, virtual_bal.iterrows()):
-                    if vr['account'] == 'Prestiti':
-                        vc.metric("💸 Prestiti da ricevere", f"€{vr['amount']:,.2f}",
-                                  help="Soldi prestati non ancora restituiti. Non conteggiati nella liquidità.")
-                    else:
-                        lbl = "🤝 Partner: ti deve" if vr['amount'] > 0 else "🤝 Partner: gli devi"
-                        vc.metric(lbl, f"€{abs(vr['amount']):,.2f}",
-                                  help="Conto virtuale col partner (quote/prestiti registrati). "
-                                       "Il saldo completo è in Spese Condivise. Non conteggiato nella liquidità.")
+            # --- Crediti (prestiti aperti, non spendibili) ---
+            # Il saldo del conto 'Partner' NON è mostrato: le compensazioni col
+            # partner passano sui conti reali, quindi non sarebbe un dovuto vero.
+            # Il saldo col partner si legge in Spese Condivise.
+            loans_open = virtual_bal.loc[virtual_bal['account'] == 'Prestiti', 'amount'].sum()
+            if 'source_file' in full_df.columns:
+                loans_open += full_df.loc[(full_df['account'] == 'Partner')
+                                          & full_df['source_file'].isin(['loan', 'loan_repay']),
+                                          'amount'].sum()
+            if abs(loans_open) > 0.005:
+                st.metric("💸 Prestiti da ricevere", f"€{loans_open:,.2f}",
+                          help="Soldi prestati (anche al partner) non ancora restituiti. "
+                               "Non conteggiati nella liquidità. Il saldo spese col partner è in Spese Condivise.")
 
             # --- Wallet Grid ---
             if not balances.empty:
