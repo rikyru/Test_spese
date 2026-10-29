@@ -15,5 +15,5 @@ rules.yaml
 # Temp/Test Scripts
 debug_log.txt
 debug_db_content.py
-test_*.py
+/test_*.py
 check_tags.py
