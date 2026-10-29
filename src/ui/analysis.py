@@ -307,44 +307,54 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     # ====== 3. CATEGORY TRENDS ======
     st.markdown("### 📈 Trend Categorie")
 
-    if len(all_monthly_totals) >= 3:
-        last_3_months = sorted(all_expenses['month_year'].unique())[-3:]
+    # Escludi il mese in corso (parziale): confrontare un mese non concluso con i
+    # precedenti pieni farebbe sembrare tutte le categorie in calo.
+    _ip = in_progress_period(full_df)
+    months_complete = [m for m in sorted(all_expenses['month_year'].unique()) if m != _ip]
+
+    if len(months_complete) >= 2:
+        last_3_months = months_complete[-3:]
+        n_prev = len(last_3_months) - 1
         recent = all_expenses[all_expenses['month_year'].isin(last_3_months)]
         cat_monthly = recent.groupby(['month_year', 'category'])['abs_amount'].sum().reset_index()
+        last_month = last_3_months[-1]
 
         trends = []
         for cat in cat_monthly['category'].unique():
             cat_data = cat_monthly[cat_monthly['category'] == cat].sort_values('month_year')
-            if len(cat_data) >= 2:
-                values = cat_data['abs_amount'].values
-                avg_prev = values[:-1].mean()
-                last_val = values[-1]
-                change_pct = ((last_val - avg_prev) / avg_prev) * 100 if avg_prev > 0 else 0
+            # richiede il mese corrente completo + almeno un mese precedente
+            if cat_data['month_year'].iloc[-1] != last_month or len(cat_data) < 2:
+                continue
+            last_val = float(cat_data['abs_amount'].iloc[-1])
+            avg_prev = float(cat_data['abs_amount'].iloc[:-1].mean())
+            change_pct = ((last_val - avg_prev) / avg_prev) * 100 if avg_prev > 0 else 0
 
-                if change_pct > 15:
-                    badge = "🔴 ↑"
-                elif change_pct < -15:
-                    badge = "🟢 ↓"
-                else:
-                    badge = "⚪ →"
+            if change_pct > 15:
+                badge = "🔴 ↑"
+            elif change_pct < -15:
+                badge = "🟢 ↓"
+            else:
+                badge = "⚪ →"
 
-                trends.append({
-                    'Categoria': cat,
-                    'Trend': badge,
-                    '_ultimo_val': last_val,
-                    '_avg_val': avg_prev,
-                    '_change_num': change_pct,
-                    'Ultimo Mese': f"€{last_val:,.0f}",
-                    'Media 2 Mesi': f"€{avg_prev:,.0f}",
-                    'Variazione': f"{change_pct:+.0f}%"
-                })
+            trends.append({
+                'Categoria': cat,
+                'Trend': badge,
+                '_change_num': change_pct,
+                'Ultimo Mese': f"€{last_val:,.0f}",
+                f'Media {n_prev} mesi': f"€{avg_prev:,.0f}",
+                'Variazione': f"{change_pct:+.0f}%"
+            })
 
+        st.caption(f"Ultimo mese completo **{last_month}** vs media dei {n_prev} precedenti "
+                   "(mese in corso escluso).")
         if trends:
             trends_df = pd.DataFrame(trends).sort_values('_change_num', ascending=False)
-            display_cols = ['Categoria', 'Trend', 'Ultimo Mese', 'Media 2 Mesi', 'Variazione']
+            display_cols = ['Categoria', 'Trend', 'Ultimo Mese', f'Media {n_prev} mesi', 'Variazione']
             st.dataframe(trends_df[display_cols], use_container_width=True, hide_index=True)
+        else:
+            st.info("Nessuna categoria con dati sufficienti per il confronto.")
     else:
-        st.info("Servono almeno 3 mesi di dati per i trend.")
+        st.info("Servono almeno 2 mesi completi di dati per i trend.")
 
     st.divider()
 
