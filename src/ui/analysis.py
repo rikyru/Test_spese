@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 from src.data_manager import DataManager
 from src.utils import SUBSCRIPTION_TAGS, liquid_balance
-from src.reimbursements import net_partner_reimbursements
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +145,6 @@ def render_analysis(data_manager: DataManager):
     df['date'] = pd.to_datetime(df['date'])
     df['year'] = df['date'].dt.year
     df['month'] = df['date'].dt.month
-    # Analisi sulla TUA quota: i rimborsi del partner scalano le spese condivise
-    # del mese precedente invece di contare come entrate.
-    df = net_partner_reimbursements(df, data_manager.rules_engine.rules.get('split_config', {}))
 
     # Freschezza dati: le analisi "a oggi" sono affidabili solo se i dati sono recenti
     _ref = df['date'].max()

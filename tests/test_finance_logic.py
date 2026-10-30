@@ -172,16 +172,8 @@ class TestRecurring:
         assert dm.get_transactions().empty
 
 
-# --- Rimborsi del partner e media mensile standard ---
-from src.reimbursements import net_partner_reimbursements, partner_share
+# --- Media mensile standard ---
 from src.ui.analysis import monthly_totals, avg_monthly
-
-SPLIT_CONF = {
-    'default_share_pct': 50,
-    'loan_tags': ['prestito'],
-    'rules': [{'type': 'tag', 'match': 'luce', 'my_share': 50},
-              {'type': 'category', 'match': 'Spesa alimentare', 'my_share': 70}],
-}
 
 
 def _tx(rows):
@@ -191,59 +183,6 @@ def _tx(rows):
     df['account'] = 'Conto'
     df['description'] = ''
     return df
-
-
-class TestPartnerShare:
-    def test_rules(self):
-        assert partner_share('Spesa alimentare', [], SPLIT_CONF) == pytest.approx(0.3)
-        assert partner_share('Casa', ['luce'], SPLIT_CONF) == pytest.approx(0.5)
-        assert partner_share('Casa', ['prestito'], SPLIT_CONF) == 1.0
-        assert partner_share('Svago', [], SPLIT_CONF) == 0.0
-        assert partner_share('Svago', ['condiviso'], SPLIT_CONF) == pytest.approx(0.5)
-        assert partner_share('Spesa alimentare', ['partner_paid'], SPLIT_CONF) == 0.0
-
-
-class TestNetReimbursements:
-    def test_reimbursement_nets_previous_month_by_weight(self):
-        df = _tx([
-            ('2026-08-05', -100.0, 'Spesa alimentare', 'Expense', []),   # peso 30
-            ('2026-08-10', -60.0, 'Casa', 'Expense', ['luce']),         # peso 30
-            ('2026-08-12', -50.0, 'Svago', 'Expense', []),              # non condivisa
-            ('2026-09-07', 40.0, 'Entrate aggiuntive', 'Income', ['rimborsocri']),
-            ('2026-09-10', -80.0, 'Spesa alimentare', 'Expense', []),   # mese del rimborso: non toccato
-        ])
-        out = net_partner_reimbursements(df, SPLIT_CONF)
-        assert out['amount'].sum() == pytest.approx(df['amount'].sum())
-        assert out.loc[0, 'amount'] == pytest.approx(-80.0)
-        assert out.loc[1, 'amount'] == pytest.approx(-40.0)
-        assert out.loc[2, 'amount'] == -50.0
-        assert out.loc[4, 'amount'] == -80.0
-        assert out.loc[3, 'type'] == 'Reimbursement' and out.loc[3, 'amount'] == 0.0
-        assert real_income(out).empty
-
-    def test_actual_amount_wins_over_rules_but_never_positive(self):
-        df = _tx([
-            ('2026-08-05', -100.0, 'Spesa alimentare', 'Expense', []),   # regole: 30
-            ('2026-09-07', 150.0, 'Entrate aggiuntive', 'Income', ['rimborsocri']),
-        ])
-        out = net_partner_reimbursements(df, SPLIT_CONF)
-        assert out.loc[0, 'amount'] == pytest.approx(0.0)
-        # eccedenza oltre la spesa resta entrata
-        assert out.loc[1, 'type'] == 'Income' and out.loc[1, 'amount'] == pytest.approx(50.0)
-        assert out['amount'].sum() == pytest.approx(df['amount'].sum())
-
-    def test_falls_back_to_older_month(self):
-        df = _tx([
-            ('2026-06-05', -100.0, 'Spesa alimentare', 'Expense', []),
-            ('2026-08-07', 20.0, 'Entrate aggiuntive', 'Income', ['rimborsocri']),
-        ])
-        out = net_partner_reimbursements(df, SPLIT_CONF)
-        assert out.loc[0, 'amount'] == pytest.approx(-80.0)
-
-    def test_no_reimbursements_unchanged(self):
-        df = _tx([('2026-08-05', -100.0, 'Spesa alimentare', 'Expense', [])])
-        out = net_partner_reimbursements(df, SPLIT_CONF)
-        assert out['amount'].tolist() == [-100.0]
 
 
 class TestMonthlyAverage:

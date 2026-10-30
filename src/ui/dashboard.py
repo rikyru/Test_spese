@@ -9,7 +9,6 @@ from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
 from src.ui.analysis import real_income, real_expenses, in_progress_period, avg_monthly, AVG_BASIS_NOTE
 from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
-from src.reimbursements import net_partner_reimbursements
 
 def render_dashboard(data_manager):
     st.header("Dashboard")
@@ -29,10 +28,6 @@ def render_dashboard(data_manager):
         df['date'] = pd.to_datetime(df['date'])
         df['year'] = df['date'].dt.year
         df['month'] = df['date'].dt.month
-        # Movimenti originali (saldi dei conti, liste transazioni); per i riepiloghi
-        # di spesa si usa la TUA quota: rimborsi del partner scalati dalle spese condivise.
-        raw_df = df
-        df = net_partner_reimbursements(df, re.rules.get('split_config', {}))
 
         # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
         min_date = df['date'].min().date()
@@ -167,11 +162,11 @@ def render_dashboard(data_manager):
 
         if not full_df.empty:
             # Calculate balance per account
-            all_balances = raw_df.groupby('account')['amount'].sum().reset_index()
+            all_balances = full_df.groupby('account')['amount'].sum().reset_index()
             # Conti virtuali (Partner, Prestiti) = crediti/debiti, NON liquidità spendibile
             virtual_bal = all_balances[all_balances['account'].isin(VIRTUAL_ACCOUNTS)]
             balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS)].reset_index(drop=True)
-            total_liquidity = liquid_balance(raw_df)
+            total_liquidity = liquid_balance(full_df)
 
             # --- Total Liquidity Big Card ---
             st.markdown(f"""
@@ -725,8 +720,7 @@ def render_dashboard(data_manager):
 
         # 4. Detailed Transaction List (Optional toggle)
         with st.expander("View All Transactions in this Period"):
-            st.dataframe(raw_df.loc[filtered_df.index].sort_values('date', ascending=False),
-                         use_container_width=True)
+            st.dataframe(filtered_df.sort_values('date', ascending=False), use_container_width=True)
 
     except Exception as e:
         st.error(f"Error loading dashboard: {e}")
