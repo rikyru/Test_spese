@@ -204,3 +204,41 @@ class TestMonthlyAverage:
         sub = full[full['category'] == 'A']
         assert len(monthly_totals(sub, ref_df=full)) == 4
         assert avg_monthly(sub, ref_df=full) == pytest.approx(25.0)
+
+
+# --- Vista "Mia quota" ---
+from src.partner_share import partner_share, my_share_view
+
+SPLIT_CONF = {
+    'default_share_pct': 50,
+    'loan_tags': ['prestito'],
+    'rules': [{'type': 'tag', 'match': 'luce', 'my_share': 50},
+              {'type': 'category', 'match': 'Spesa alimentare', 'my_share': 70}],
+}
+
+
+class TestPartnerShare:
+    def test_rules(self):
+        assert partner_share('Spesa alimentare', [], SPLIT_CONF) == pytest.approx(0.3)
+        assert partner_share('Casa', ['#Luce'], SPLIT_CONF) == pytest.approx(0.5)
+        assert partner_share('Casa', ['prestito'], SPLIT_CONF) == 1.0
+        assert partner_share('Svago', [], SPLIT_CONF) == 0.0
+        assert partner_share('Svago', ['condiviso'], SPLIT_CONF) == pytest.approx(0.5)
+        assert partner_share('Spesa alimentare', ['partner_paid'], SPLIT_CONF) == 0.0
+
+
+class TestMyShareView:
+    def test_only_expenses_scaled(self):
+        df = _tx([
+            ('2024-01-05', -100.0, 'Spesa alimentare', 'Expense', []),
+            ('2024-01-06', -60.0, 'Casa', 'Expense', ['luce']),
+            ('2024-01-07', -50.0, 'Svago', 'Expense', []),
+            ('2024-01-08', 200.0, 'Entrate aggiuntive', 'Income', ['rimborsocri']),
+        ])
+        out = my_share_view(df, SPLIT_CONF)
+        assert out['amount'].tolist() == pytest.approx([-70.0, -30.0, -50.0, 200.0])
+        assert df['amount'].tolist() == [-100.0, -60.0, -50.0, 200.0]   # originale intatto
+
+    def test_empty_conf_unchanged(self):
+        df = _tx([('2024-01-05', -100.0, 'Spesa alimentare', 'Expense', [])])
+        assert my_share_view(df, {})['amount'].tolist() == [-100.0]

@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from src.data_manager import DataManager
 from src.utils import SUBSCRIPTION_TAGS, liquid_balance
+from src.partner_share import my_share_view
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,18 @@ def render_analysis(data_manager: DataManager):
                                 key='ana_view', label_visibility="collapsed")
     view = view or views[0]
 
+    # Interruttore "Mia quota": solo nelle viste di SPESA (entrate/risparmio/saldi
+    # restano sui movimenti reali). Stima con le regole di Spese Condivise.
+    share_views = {"Tag", "Necessità vs Desideri", "Previsioni", "Categorie"}
+    raw_df = df
+    if view in share_views:
+        if st.toggle("👤 Mia quota (spese condivise)", key='ana_my_share',
+                     help="Riduce le spese condivise alla tua parte stimata con le regole "
+                          "di Spese Condivise, su tutto lo storico. Non usa i rimborsi effettivi."):
+            df = my_share_view(df, data_manager.rules_engine.rules.get('split_config', {}))
+            st.caption("👤 Spese condivise alla tua quota **stimata** (regole di Spese Condivise). "
+                       "Entrate, risparmio e saldi non cambiano.")
+
     filtered_df = df
     if view in period_views:
         filtered_df = _period_filter(df)
@@ -183,7 +196,8 @@ def render_analysis(data_manager: DataManager):
     elif view == "Necessità vs Desideri":
         render_needs_vs_wants(df, filtered_df)
     elif view == "Previsioni":
-        render_forecasting(df, df, data_manager)
+        # Previsione spese sulla vista scelta; scenario e calendario liquidità sui movimenti reali
+        render_forecasting(df, raw_df, data_manager)
     elif view == "Anno vs Anno":
         render_yoy_comparison(df)
     elif view == "Categorie":
@@ -854,6 +868,11 @@ def render_needs_vs_wants(full_df, filtered_df=None):
     # Estimate income for the period
     income_df = real_income(filtered_df) if filtered_df is not None else pd.DataFrame()
     total_income = income_df['amount'].sum() if not income_df.empty else 0
+    if st.session_state.get('ana_my_share'):
+        # Spese alla quota stimata vs entrate reali (con i rimborsi): il confronto non torna
+        st.info("Con «Mia quota» attivo la regola 50/30/20 non è mostrata: confronterebbe "
+                "spese stimate con entrate reali. Spegni l'interruttore per vederla.")
+        total_income = 0
 
     if total_income > 0:
         target_needs = total_income * 0.50
@@ -888,7 +907,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
         display_rule['Scostamento'] = display_rule['Scostamento'].apply(lambda x: f"{'+' if x >= 0 else ''}€{x:,.0f}")
         st.dataframe(display_rule[['Voce', 'Target', 'Attuale', 'Scostamento', 'Stato']],
                      use_container_width=True, hide_index=True)
-    else:
+    elif not st.session_state.get('ana_my_share'):
         st.info("Aggiungi dati di entrata per vedere il confronto con la regola 50/30/20.")
 
 
