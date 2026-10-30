@@ -7,8 +7,9 @@ import datetime
 import calendar
 from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
-from src.ui.analysis import real_income, real_expenses, in_progress_period
+from src.ui.analysis import real_income, real_expenses, in_progress_period, avg_monthly, AVG_BASIS_NOTE
 from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
+from src.reimbursements import net_partner_reimbursements
 
 def render_dashboard(data_manager):
     st.header("Dashboard")
@@ -28,6 +29,10 @@ def render_dashboard(data_manager):
         df['date'] = pd.to_datetime(df['date'])
         df['year'] = df['date'].dt.year
         df['month'] = df['date'].dt.month
+        # Movimenti originali (saldi dei conti, liste transazioni); per i riepiloghi
+        # di spesa si usa la TUA quota: rimborsi del partner scalati dalle spese condivise.
+        raw_df = df
+        df = net_partner_reimbursements(df, re.rules.get('split_config', {}))
 
         # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
         min_date = df['date'].min().date()
@@ -162,11 +167,11 @@ def render_dashboard(data_manager):
 
         if not full_df.empty:
             # Calculate balance per account
-            all_balances = full_df.groupby('account')['amount'].sum().reset_index()
+            all_balances = raw_df.groupby('account')['amount'].sum().reset_index()
             # Conti virtuali (Partner, Prestiti) = crediti/debiti, NON liquidità spendibile
             virtual_bal = all_balances[all_balances['account'].isin(VIRTUAL_ACCOUNTS)]
             balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS)].reset_index(drop=True)
-            total_liquidity = liquid_balance(full_df)
+            total_liquidity = liquid_balance(raw_df)
 
             # --- Total Liquidity Big Card ---
             st.markdown(f"""
@@ -235,20 +240,10 @@ def render_dashboard(data_manager):
                             st.markdown(f"<h3 style='margin:0; color: {color};'>€ {bal:,.2f}</h3>", unsafe_allow_html=True)
 
             # --- 🛟 Fondo Emergenza ---
-            exp_all = real_expenses(full_df).copy()
-            if not exp_all.empty:
-                exp_all['abs'] = exp_all['amount'].abs()
-                mexp = exp_all.groupby(exp_all['date'].dt.to_period('M'))['abs'].sum()
-                inc_all = real_income(full_df)
-                minc = inc_all.groupby(pd.to_datetime(inc_all['date']).dt.to_period('M'))['amount'].sum()
-                ipp = in_progress_period(full_df)   # escludi il mese in corso parziale
-                if ipp is not None:
-                    if ipp in mexp.index:
-                        mexp = mexp.drop(ipp)
-                    if ipp in minc.index:
-                        minc = minc.drop(ipp)
-                avg_exp = float(mexp.median()) if not mexp.empty else 0.0
-                typ_save = float((minc - mexp).dropna().median()) if not (minc - mexp).dropna().empty else 0.0
+            if not real_expenses(full_df).empty:
+                # Stessa base di Analisi > Salute: media ultimi 12 mesi completi
+                avg_exp = avg_monthly(full_df)
+                typ_save = avg_monthly(full_df, 'income') - avg_exp
 
                 target_months = int(re.rules.get('emergency_target_months', 6) or 6)
                 target_amt = target_months * avg_exp
@@ -257,7 +252,7 @@ def render_dashboard(data_manager):
                 st.markdown("##### 🛟 Fondo Emergenza")
                 ef1, ef2, ef3, ef4 = st.columns([1, 1, 1, 1.4])
                 ef1.metric("Liquidità", f"€{total_liquidity:,.0f}")
-                ef2.metric("Copre", f"{runway:.1f} mesi", help="Mesi di spese coperti dalla liquidità attuale")
+                ef2.metric("Copre", f"{runway:.1f} mesi", help=f"Liquidità / spesa media mensile €{avg_exp:,.0f}. {AVG_BASIS_NOTE}.")
                 ef3.metric(f"Obiettivo ({target_months}m)", f"€{target_amt:,.0f}")
                 new_tm = ef4.slider("Mesi obiettivo", 1, 12, target_months, key="ef_target")
                 if new_tm != target_months:
@@ -274,7 +269,7 @@ def render_dashboard(data_manager):
                     else:
                         manca = target_amt - total_liquidity
                         if typ_save > 0:
-                            st.info(f"Mancano **€{manca:,.0f}**. Risparmiando ~€{typ_save:,.0f}/mese (tipico) "
+                            st.info(f"Mancano **€{manca:,.0f}**. Risparmiando ~€{typ_save:,.0f}/mese (media 12m) "
                                     f"ci arrivi in ~**{manca / typ_save:.0f} mesi**.")
                         else:
                             st.warning(f"Mancano **€{manca:,.0f}**. Col risparmio mensile attuale (≤ 0) l'obiettivo "
@@ -730,7 +725,8 @@ def render_dashboard(data_manager):
 
         # 4. Detailed Transaction List (Optional toggle)
         with st.expander("View All Transactions in this Period"):
-            st.dataframe(filtered_df.sort_values('date', ascending=False), use_container_width=True)
+            st.dataframe(raw_df.loc[filtered_df.index].sort_values('date', ascending=False),
+                         use_container_width=True)
 
     except Exception as e:
         st.error(f"Error loading dashboard: {e}")

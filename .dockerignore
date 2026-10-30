@@ -1,9 +1,16 @@
 .venv/
 .git/
 __pycache__/
-*.duckdb
+**/__pycache__/
+*.pyc
+# Dati personali: arrivano dal volume /app/data, non vanno nell'immagine
+finance_data/
+**/*.duckdb
+**/*.duckdb.wal
 debug_log.txt
 doc/
-*.pyc
+tests/
+.pytest_cache/
+.claude/
 .gitignore
 README*.md

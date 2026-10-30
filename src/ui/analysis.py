@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from src.data_manager import DataManager
 from src.utils import SUBSCRIPTION_TAGS, liquid_balance
+from src.reimbursements import net_partner_reimbursements
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,43 @@ def drop_in_progress(monthly_series, df):
     return monthly_series[as_period != ip]
 
 
+# Base UNICA per le medie mensili mostrate nelle analisi: ultimi 12 mesi
+# completi (mese in corso escluso), contando anche i mesi a zero.
+AVG_WINDOW_MONTHS = 12
+AVG_BASIS_NOTE = "Media degli ultimi 12 mesi completi (mese in corso escluso)"
+
+
+def last_complete_period(df):
+    """Ultimo mese concluso con dati (il mese in corso parziale non conta)."""
+    if df is None or df.empty:
+        return None
+    ip = in_progress_period(df)
+    return ip - 1 if ip is not None else pd.to_datetime(df['date']).max().to_period('M')
+
+
+def monthly_totals(df, kind='expense', ref_df=None):
+    """Totali mensili (positivi) di spese o entrate reali sui mesi COMPLETI,
+    con i mesi senza movimenti a 0. `ref_df` (default `df`) decide qual è
+    l'ultimo mese completo: serve quando `df` è un sottoinsieme (es. una categoria)."""
+    ref = df if ref_df is None else ref_df
+    end = last_complete_period(ref)
+    sub = real_expenses(df) if kind == 'expense' else real_income(df)
+    if end is None or sub.empty:
+        return pd.Series(dtype=float)
+    s = sub.groupby(pd.to_datetime(sub['date']).dt.to_period('M'))['amount'].sum()
+    s = s.abs() if kind == 'expense' else s
+    start = s.index.min()
+    if start > end:
+        return pd.Series(dtype=float)
+    return s.reindex(pd.period_range(start, end, freq='M'), fill_value=0.0)
+
+
+def avg_monthly(df, kind='expense', ref_df=None, window=AVG_WINDOW_MONTHS):
+    """Media mensile standard (vedi AVG_BASIS_NOTE)."""
+    s = monthly_totals(df, kind, ref_df).tail(window)
+    return float(s.mean()) if len(s) else 0.0
+
+
 def split_income(inc_df):
     """Divide le entrate reali in (ordinarie, straordinarie) per categoria."""
     if inc_df is None or inc_df.empty:
@@ -99,15 +137,18 @@ def split_income(inc_df):
 
 
 def render_analysis(data_manager: DataManager):
-    st.header("Deep Analysis & Forecasting")
+    st.header("📊 Analisi e Previsioni")
 
     df = data_manager.get_transactions()
     if df.empty:
-        st.info("No data available.")
+        st.info("Nessun dato disponibile.")
         return
     df['date'] = pd.to_datetime(df['date'])
     df['year'] = df['date'].dt.year
     df['month'] = df['date'].dt.month
+    # Analisi sulla TUA quota: i rimborsi del partner scalano le spese condivise
+    # del mese precedente invece di contare come entrate.
+    df = net_partner_reimbursements(df, data_manager.rules_engine.rules.get('split_config', {}))
 
     # Freschezza dati: le analisi "a oggi" sono affidabili solo se i dati sono recenti
     _ref = df['date'].max()
@@ -121,61 +162,68 @@ def render_analysis(data_manager: DataManager):
                    "Alcune analisi 'a oggi' potrebbero non riflettere i movimenti recenti — "
                    "aggiungi/importa le transazioni mancanti.")
 
-    # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
+    # Selettore vista: renderizza SOLO l'analisi scelta (molto più fluido delle st.tabs,
+    # che invece calcolano tutte le schede a ogni interazione).
+    views = ["Smart Insights", "Entrate", "Tag", "Necessità vs Desideri",
+             "Previsioni", "Anno vs Anno", "Categorie", "Salute"]
+    # Solo queste viste usano il filtro periodo; le altre lavorano su tutto lo storico
+    period_views = {"Smart Insights", "Entrate", "Tag", "Necessità vs Desideri"}
+    view = st.segmented_control("Vista analisi", views, default=views[0],
+                                key='ana_view', label_visibility="collapsed")
+    view = view or views[0]
+
+    filtered_df = df
+    if view in period_views:
+        filtered_df = _period_filter(df)
+    else:
+        st.caption("🗂️ Questa vista usa tutto lo storico (il filtro periodo non si applica).")
+
+    if view == "Smart Insights":
+        render_smart_insights(df, filtered_df, data_manager)
+    elif view == "Entrate":
+        render_income_analysis(df, filtered_df)
+    elif view == "Tag":
+        render_tag_analysis(filtered_df)
+    elif view == "Necessità vs Desideri":
+        render_needs_vs_wants(df, filtered_df)
+    elif view == "Previsioni":
+        render_forecasting(df, df, data_manager)
+    elif view == "Anno vs Anno":
+        render_yoy_comparison(df)
+    elif view == "Categorie":
+        render_category_deepdive(df, filtered_df, data_manager)
+    elif view == "Salute":
+        render_financial_health(df, data_manager)
+
+
+def _period_filter(df):
+    """Barra filtri periodo (Tutto/Anno/Mese/Personalizzato); ritorna il df filtrato."""
     min_date = df['date'].min().date()
     max_date = df['date'].max().date()
     today = pd.Timestamp.today()
     month_names = {1:"Gen",2:"Feb",3:"Mar",4:"Apr",5:"Mag",6:"Giu",
                    7:"Lug",8:"Ago",9:"Set",10:"Ott",11:"Nov",12:"Dic"}
 
-    mode_map = {"Tutto": "All Time", "Anno": "Year", "Mese": "Month", "Personalizzato": "Custom"}
+    modes = ["Tutto", "Anno", "Mese", "Personalizzato"]
     af1, af2, af3 = st.columns([1.4, 1.3, 1.3])
-    mode_label = af1.selectbox("Periodo", list(mode_map.keys()), index=0, key='ana_mode')
-    filter_mode = mode_map[mode_label]
-
-    filtered_df = df.copy()
+    mode = af1.selectbox("Periodo", modes, index=0, key='ana_mode')
     years = sorted(df['year'].unique(), reverse=True)
 
-    if filter_mode == "Year":
+    if mode == "Anno":
         selected_year = af2.selectbox("Anno", years, key='ana_year')
-        filtered_df = df[df['year'] == selected_year]
-    elif filter_mode == "Month":
+        return df[df['year'] == selected_year]
+    if mode == "Mese":
         selected_year = af2.selectbox("Anno", years, key='ana_year_m')
         selected_month = af3.selectbox("Mese", list(range(1, 13)), index=int(today.month) - 1,
                                        format_func=lambda m: month_names[m], key='ana_month')
-        filtered_df = df[(df['year'] == selected_year) & (df['month'] == selected_month)]
-    elif filter_mode == "Custom":
+        return df[(df['year'] == selected_year) & (df['month'] == selected_month)]
+    if mode == "Personalizzato":
         start_date = af2.date_input("Da", min_date, key='ana_start')
         end_date = af3.date_input("A", max_date, key='ana_end')
         if start_date <= end_date:
-            filtered_df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
-        else:
-            st.error("La data iniziale deve precedere quella finale.")
-
-    # Selettore vista: renderizza SOLO l'analisi scelta (molto più fluido delle st.tabs,
-    # che invece calcolano tutte le schede a ogni interazione).
-    views = ["Smart Insights", "Income", "Tag", "Needs vs Wants",
-             "Forecasting", "Anno vs Anno", "Categorie", "Salute"]
-    view = st.segmented_control("Vista analisi", views, default=views[0],
-                                key='ana_view', label_visibility="collapsed")
-    view = view or views[0]
-
-    if view == views[0]:
-        render_smart_insights(df, filtered_df, data_manager)
-    elif view == views[1]:
-        render_income_analysis(df, filtered_df)
-    elif view == views[2]:
-        render_tag_analysis(filtered_df)
-    elif view == views[3]:
-        render_needs_vs_wants(df, filtered_df)
-    elif view == views[4]:
-        render_forecasting(filtered_df, df, data_manager)
-    elif view == views[5]:
-        render_yoy_comparison(df)
-    elif view == views[6]:
-        render_category_deepdive(df, filtered_df, data_manager)
-    elif view == views[7]:
-        render_financial_health(df, data_manager)
+            return df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
+        st.error("La data iniziale deve precedere quella finale.")
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +234,7 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     st.subheader("🧠 Smart Insights")
 
     if filtered_df.empty:
-        st.info("No data available for insights.")
+        st.info("Nessun dato disponibile per gli insight.")
         return
 
     full_df = full_df.copy()
@@ -204,7 +252,7 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     income = real_income(filtered_df)
 
     if expenses.empty:
-        st.write("No expenses to analyze.")
+        st.write("Nessuna spesa da analizzare.")
         return
 
     expenses['month_year'] = expenses['date'].dt.to_period('M')
@@ -680,18 +728,18 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
 # ---------------------------------------------------------------------------
 
 def render_tag_analysis(df):
-    st.subheader("Tag Analysis")
+    st.subheader("🏷️ Analisi Tag")
 
     df_tags = df.copy().explode('tags')
     df_tags['tags'] = df_tags['tags'].astype(str)
     df_tags = df_tags[~df_tags['tags'].isin(['nan', '', 'None'])]
 
     if df_tags.empty:
-        st.info("No tags found in data.")
+        st.info("Nessun tag trovato nei dati.")
         return
 
     all_tags = sorted(df_tags['tags'].unique())
-    selected_tag = st.selectbox("Select Tag to Analyze", all_tags)
+    selected_tag = st.selectbox("Tag da analizzare", all_tags)
 
     if not selected_tag:
         return
@@ -755,7 +803,7 @@ def render_tag_analysis(df):
 # ---------------------------------------------------------------------------
 
 def render_needs_vs_wants(full_df, filtered_df=None):
-    st.subheader("Needs vs Wants")
+    st.subheader("⚖️ Necessità vs Desideri")
 
     # Accept both old (single df) and new (full_df, filtered_df) signatures
     if filtered_df is None:
@@ -779,7 +827,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
     # Stacked bar over time
     nw_grouped = expenses.groupby(['month_year', 'necessity'])['abs_amount'].sum().reset_index()
     fig_nw = px.bar(nw_grouped, x='month_year', y='abs_amount', color='necessity',
-                    title="Needs vs Wants nel Tempo", barmode='stack',
+                    title="Necessità vs Desideri nel tempo", barmode='stack',
                     color_discrete_map={'Need': '#4CAF50', 'Want': '#FF7043'},
                     category_orders={"necessity": ["Need", "Want"]})
     fig_nw.update_layout(xaxis_title="Mese", yaxis_title="€")
@@ -794,8 +842,8 @@ def render_needs_vs_wants(full_df, filtered_df=None):
     wants_pct = (wants_total / total_exp * 100) if total_exp > 0 else 0
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Needs", f"€{needs_total:,.2f}", f"{needs_pct:.0f}% del totale")
-    col2.metric("Wants", f"€{wants_total:,.2f}", f"{wants_pct:.0f}% del totale")
+    col1.metric("Necessità (Need)", f"€{needs_total:,.2f}", f"{needs_pct:.0f}% del totale")
+    col2.metric("Desideri (Want)", f"€{wants_total:,.2f}", f"{wants_pct:.0f}% del totale")
     col3.metric("Totale Spese", f"€{total_exp:,.2f}")
 
     unclassified = total_exp - needs_total - wants_total
@@ -853,7 +901,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
 # ---------------------------------------------------------------------------
 
 def render_forecasting(df, full_df=None, data_manager=None):
-    st.subheader("📈 Forecasting")
+    st.subheader("📈 Previsioni")
 
     df = df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -1136,12 +1184,12 @@ def render_year_scenario(full_df, data_manager=None):
     # --- Dove puoi tagliare: solo la parte VARIABILE (Wants) ---
     st.divider()
     st.markdown("### ✂️ Dove puoi tagliare (resto dell'anno)")
-    st.caption(f"Impegni noti €{proj_committed:,.0f} non tagliabili. Sul variabile, i Wants sono la leva.")
+    st.caption(f"Impegni noti €{proj_committed:,.0f} non tagliabili. Sul variabile, i Desideri (Want) sono la leva.")
     t1, t2, t3 = st.columns(3)
-    t1.metric("Needs variabili proiettati", f"€{proj_needs:,.0f}")
-    t2.metric("Wants proiettati", f"€{proj_wants:,.0f}")
-    t3.metric("Quota Wants (su variabile)", f"{(proj_wants / proj_variable * 100) if proj_variable else 0:.0f}%")
-    cut = st.slider("Simula un taglio dei Wants", 0, 100, 20, step=5, format="%d%%", key="wants_cut")
+    t1.metric("Necessità variabili proiettate", f"€{proj_needs:,.0f}")
+    t2.metric("Desideri proiettati", f"€{proj_wants:,.0f}")
+    t3.metric("Quota Desideri (sul variabile)", f"{(proj_wants / proj_variable * 100) if proj_variable else 0:.0f}%")
+    cut = st.slider("Simula un taglio dei Desideri", 0, 100, 20, step=5, format="%d%%", key="wants_cut")
     saved = proj_wants * cut / 100.0
     st.success(f"Tagliando il **{cut}%** dei Wants risparmi **€{saved:,.0f}** in più entro fine anno "
                f"→ risparmio stimato **€{fy_net_base + saved:,.0f}** (baseline €{fy_net_base:,.0f}).")
@@ -1270,13 +1318,13 @@ def render_year_scenario(full_df, data_manager=None):
 # ---------------------------------------------------------------------------
 
 def render_income_analysis(full_df, filtered_df):
-    st.subheader("💰 Income Analysis")
+    st.subheader("💰 Analisi Entrate")
 
     full_income = real_income(full_df)
     full_income['date'] = pd.to_datetime(full_income['date'])
 
     if full_income.empty:
-        st.info("No income data found.")
+        st.info("Nessuna entrata trovata.")
         return
 
     monthly_inc_all = full_income.groupby(pd.Grouper(key='date', freq='ME'))['amount'].sum()
@@ -1332,7 +1380,7 @@ def render_income_analysis(full_df, filtered_df):
         col3.info(f"Dati anno precedente non disponibili.")
 
     fig_annual = px.bar(x=annual_inc.index, y=annual_inc.values,
-                        title="Annual Income Trend", labels={'x': 'Year', 'y': 'Total Income'})
+                        title="Entrate per anno", labels={'x': 'Anno', 'y': 'Entrate totali'})
     st.plotly_chart(fig_annual, use_container_width=True)
 
     st.divider()
@@ -1416,16 +1464,16 @@ def render_income_analysis(full_df, filtered_df):
 
     st.divider()
 
-    st.markdown("### 🏦 Income Sources")
+    st.markdown("### 🏦 Fonti di entrata")
     if not filtered_income.empty:
         filtered_income['date'] = pd.to_datetime(filtered_income['date'])
         inc_by_cat = filtered_income.groupby('category')['amount'].sum().reset_index()
         fig_pie = px.pie(inc_by_cat, values='amount', names='category',
-                         title="Income Mix (Selected Period)", hole=0.4)
+                         title="Composizione entrate (periodo selezionato)", hole=0.4)
 
         monthly_cat = filtered_income.groupby([pd.Grouper(key='date', freq='ME'), 'category'])['amount'].sum().reset_index()
         fig_stack = px.bar(monthly_cat, x='date', y='amount', color='category',
-                           title="Income Sources over Time")
+                           title="Fonti di entrata nel tempo")
 
         c1, c2 = st.columns(2)
         c1.plotly_chart(fig_pie, use_container_width=True)
@@ -1701,13 +1749,13 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
         monthly = monthly.drop(_ip, errors='ignore')
 
     total = cat_df['abs_amount'].sum()
-    avg_month = monthly.mean() if len(monthly) else 0
+    avg_month = avg_monthly(cat_df, ref_df=full_df)
     last = monthly.iloc[-1] if len(monthly) else 0
     budget = float(budgets.get(sel, 0) or 0)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Totale (all-time)", f"€{total:,.0f}")
-    c2.metric("Media Mensile", f"€{avg_month:,.0f}", help="Mesi completi, mese in corso escluso")
+    c2.metric("Media Mensile", f"€{avg_month:,.0f}", help=AVG_BASIS_NOTE)
     c3.metric("Ultimo mese completo", f"€{last:,.0f}")
     if budget > 0:
         over = last - budget
@@ -1825,7 +1873,7 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
         rows.append({
             'Categoria': cat,
             'Budget': f"€{b:,.0f}",
-            'Media Mensile': f"€{cm.mean():,.0f}",
+            'Media Mensile': f"€{avg_monthly(exp_all[exp_all['category'] == cat], ref_df=full_df):,.0f}",
             'Mesi Rientrati': f"{within}/{tot_m}",
             '_pct': within / tot_m * 100,
             'Aderenza': f"{within / tot_m * 100:.0f}%",
@@ -1869,7 +1917,7 @@ def render_financial_health(full_df, data_manager):
         monthly_inc = monthly_inc.drop(_ip, errors='ignore')
     net_worth = df['amount'].sum()          # patrimonio netto (include crediti/debiti virtuali)
     liquidity = liquid_balance(df)          # solo denaro spendibile
-    avg_exp_12 = monthly_exp.tail(12).mean()
+    avg_exp_12 = avg_monthly(df)
 
     # ===== A. FONDO EMERGENZA =====
     st.markdown("### 🛟 Fondo Emergenza")
@@ -1878,7 +1926,7 @@ def render_financial_health(full_df, data_manager):
     a1, a2, a3 = st.columns(3)
     a1.metric("Liquidità spendibile", f"€{liquidity:,.0f}",
               help=f"Esclusi i conti virtuali (Partner, Prestiti). Patrimonio netto totale: €{net_worth:,.0f}")
-    a2.metric("Spesa Media/Mese (12m)", f"€{avg_exp_12:,.0f}", help="Mesi completi, mese in corso escluso")
+    a2.metric("Spesa Media/Mese (12m)", f"€{avg_exp_12:,.0f}", help=AVG_BASIS_NOTE)
     a3.metric("Autonomia (Runway)", f"{runway:.1f} mesi")
 
     gmax = max(12, runway * 1.2)
