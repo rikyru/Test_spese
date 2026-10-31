@@ -261,6 +261,20 @@ class DataManager:
             )
         """)
 
+        # Buste paga caricate (una riga per busta: mese + tipo)
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS payslips (
+                period_key VARCHAR PRIMARY KEY,
+                year INTEGER, month INTEGER, kind VARCHAR,
+                netto DOUBLE, competenze DOUBLE, trattenute DOUBLE, paga_base DOUBLE,
+                inps DOUBLE, imponibile_irpef DOUBLE, irpef_lorda DOUBLE, detrazioni DOUBLE,
+                ritenute_irpef DOUBLE, addizionali DOUBLE, rimborso_730 DOUBLE,
+                trasferte DOUBLE, premi DOUBLE, benefit DOUBLE, benefit_tassati DOUBLE,
+                voci VARCHAR, filename VARCHAR,
+                uploaded_at TIMESTAMP DEFAULT now()
+            )
+        """)
+
         # Migration: Ensure necessity/id column exists (for existing DBs)
         try:
             columns = self.con.execute("PRAGMA table_info(transactions)").fetchall()
@@ -909,6 +923,26 @@ class DataManager:
             f"DELETE FROM transactions WHERE id IN ({placeholders})", ids
         )
         return len(ids)
+
+    PAYSLIP_FIELDS = ['year', 'month', 'kind', 'netto', 'competenze', 'trattenute', 'paga_base',
+                      'inps', 'imponibile_irpef', 'irpef_lorda', 'detrazioni', 'ritenute_irpef',
+                      'addizionali', 'rimborso_730', 'trasferte', 'premi', 'benefit', 'benefit_tassati']
+
+    def save_payslip(self, rec, filename=''):
+        """Salva (o sostituisce) una busta paga analizzata. Ritorna la chiave."""
+        import json
+        key = f"{rec['year']}-{rec['month']:02d}-{rec['kind']}"
+        cols = ['period_key'] + self.PAYSLIP_FIELDS + ['voci', 'filename']
+        vals = [key] + [rec.get(c) for c in self.PAYSLIP_FIELDS] + [json.dumps(rec.get('voci', [])), filename]
+        self.con.execute("DELETE FROM payslips WHERE period_key = ?", [key])
+        self.con.execute(f"INSERT INTO payslips ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", vals)
+        return key
+
+    def get_payslips(self):
+        return self.con.execute("SELECT * FROM payslips ORDER BY year, month, kind").df()
+
+    def delete_payslip(self, key):
+        self.con.execute("DELETE FROM payslips WHERE period_key = ?", [key])
 
     def get_transactions(self):
         return self.con.execute("SELECT * FROM transactions ORDER BY date DESC").df()

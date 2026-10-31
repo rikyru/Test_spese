@@ -11,6 +11,7 @@ from src.ui.settings import render_settings
 from src.ui.recurring import render_recurring
 from src.ui.split import render_split
 from src.ui.tag_manager import render_tag_manager
+from src.ui.payslips import render_payslips
 from src.ui.styling import apply_custom_styles
 
 st.set_page_config(page_title="Finance Dashboard", layout="wide", page_icon="💸")
@@ -79,7 +80,7 @@ if global_search:
 elif 'global_search' not in st.session_state:
     st.session_state['global_search'] = ''
 
-page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "Analysis", "Tag Manager", "Import", "Settings"])
+page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "Analysis", "Buste Paga", "Tag Manager", "Import", "Settings"])
 
 # If there's an active search, force Transactions page
 if global_search:
@@ -286,6 +287,8 @@ elif page == "Shared Expenses":
     render_split(dm)
 elif page == "Analysis":
     render_analysis(dm)
+elif page == "Buste Paga":
+    render_payslips(dm)
 elif page == "Tag Manager":
     render_tag_manager(dm)
 elif page == "Import":
