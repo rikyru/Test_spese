@@ -91,3 +91,10 @@ def test_save_and_replace(dm):
     assert len(df) == 1 and df.iloc[0]['netto'] == 2100.0
     dm.delete_payslip(key)
     assert dm.get_payslips().empty
+
+
+def test_year_end_irpef_refund_is_not_addizionale():
+    text = SAMPLE.replace("RATEI TOTALEsCOMPETENZE", "F09100IRPEF netta Cong. -100,15\nRATEI TOTALEsCOMPETENZE")
+    r = parse_payslip(text, '202612_x.pdf')
+    assert r['addizionali'] == 85.0
+    assert r['ritenute_irpef'] == pytest.approx(660.0 - 100.15)

@@ -15,6 +15,7 @@ MONTHS_IT = {'gennaio': 1, 'febbraio': 2, 'marzo': 3, 'aprile': 4, 'maggio': 5, 
 TRAVEL_CODES = {'000577'}
 BONUS_CODES = {'000111'}
 BENEFIT_CODES = {'000218'}
+ADDIZ_PREFIXES = {'F0911', 'F0912', 'F0913', 'F0914'}
 
 _NUM = r'-?\d{1,3}(?:\.\d{3})*,\d+'
 _CODE = re.compile(r'(Z\d{5}|F\d{5}|\d{6})\s?(\S.*)$')
@@ -84,10 +85,12 @@ def parse_payslip(text, filename=''):
 
     net = re.search(r'NETTO\S*DEL\S*MESE\s*\n\s*(' + _NUM + r')\s*€', text)
     base = re.search(r'PROSSIMO\S*SCATTO\s+TOTALE\s*\n(?:\S+\s+)?(' + _NUM + ')', text)
-    addiz = sum(v['amount'] for v in voci if v['code'].startswith('F091') and v['amount'])
+    # Addizionali regionale/comunale e acconto (F0911x–F0914x). F09100 è invece il
+    # conguaglio IRPEF di fine anno (negativo = rimborso): va sommato all'IRPEF.
+    addiz = sum(v['amount'] for v in voci if v['code'][:5] in ADDIZ_PREFIXES and v['amount'])
     competenze = tot(r'TOTALE\S*COMPETENZE')
     trattenute = tot(r'TOTALE\S*TRATTENUTE')
-    ritenute = _first(voci, 'F03020')
+    ritenute = _first(voci, 'F03020') + _first(voci, 'F09100')
     rimborso_730 = _first(voci, 'F00880')
     trasferte = sum(v['amount'] or 0 for v in voci if v['code'] in TRAVEL_CODES)
     premi = sum(v['amount'] or 0 for v in voci if v['code'] in BONUS_CODES)
