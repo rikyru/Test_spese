@@ -242,3 +242,28 @@ class TestMyShareView:
     def test_empty_conf_unchanged(self):
         df = _tx([('2024-01-05', -100.0, 'Spesa alimentare', 'Expense', [])])
         assert my_share_view(df, {})['amount'].tolist() == [-100.0]
+
+
+# --- Solo stipendio ---
+from src.ui.analysis import salary_coverage
+
+
+class TestSalaryCoverage:
+    def test_salary_vs_my_share(self):
+        df = _tx([
+            ('2020-01-27', 2000.0, 'Stipendio', 'Income', []),
+            ('2020-01-28', 500.0, 'Regali', 'Income', []),              # esclusa
+            ('2020-01-10', -1000.0, 'Spesa alimentare', 'Expense', []),  # tua quota 70% = 700
+            ('2020-01-11', -1500.0, 'Viaggi', 'Expense', []),
+            ('2020-03-27', 2000.0, 'Stipendio', 'Income', []),
+        ])
+        sc = salary_coverage(df, SPLIT_CONF)
+        assert list(sc.index.astype(str)) == ['2020-01', '2020-02', '2020-03']
+        assert sc.loc['2020-01', 'mie_spese'] == pytest.approx(2200.0)
+        assert sc.loc['2020-01', 'saldo'] == pytest.approx(-200.0)
+        assert sc.loc['2020-02', 'saldo'] == 0.0
+        assert sc.loc['2020-03', 'saldo'] == pytest.approx(2000.0)
+
+    def test_no_salary(self):
+        df = _tx([('2020-01-10', -10.0, 'X', 'Expense', [])])
+        assert salary_coverage(df, SPLIT_CONF)['stipendio'].sum() == 0

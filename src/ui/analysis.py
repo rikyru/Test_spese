@@ -127,6 +127,28 @@ def avg_monthly(df, kind='expense', ref_df=None, window=AVG_WINDOW_MONTHS):
     return float(s.mean()) if len(s) else 0.0
 
 
+SALARY_CATEGORY = 'Stipendio'
+
+
+def salary_coverage(df, split_conf):
+    """Per ogni mese COMPLETO: stipendio, tue spese (spese condivise alla tua
+    quota stimata con le regole di Spese Condivise) e saldo = stipendio − spese."""
+    end = last_complete_period(df)
+    if end is None:
+        return pd.DataFrame(columns=['stipendio', 'mie_spese', 'saldo'])
+    inc = real_income(df)
+    sal = inc[inc['category'] == SALARY_CATEGORY]
+    exp = real_expenses(my_share_view(df, split_conf))
+    per = lambda d: pd.to_datetime(d['date']).dt.to_period('M')
+    out = pd.DataFrame({'stipendio': sal.groupby(per(sal))['amount'].sum(),
+                        'mie_spese': exp.groupby(per(exp))['amount'].sum().abs()}).fillna(0.0)
+    if out.empty:
+        return pd.DataFrame(columns=['stipendio', 'mie_spese', 'saldo'])
+    out = out.reindex(pd.period_range(out.index.min(), end, freq='M'), fill_value=0.0)
+    out['saldo'] = out['stipendio'] - out['mie_spese']
+    return out
+
+
 def split_income(inc_df):
     """Divide le entrate reali in (ordinarie, straordinarie) per categoria."""
     if inc_df is None or inc_df.empty:
@@ -2024,6 +2046,53 @@ def render_financial_health(full_df, data_manager):
     fig_d.update_layout(height=320, title="Netto Mensile (entrate − spese reali)",
                         yaxis_title='€', xaxis_title='Mese')
     st.plotly_chart(fig_d, use_container_width=True)
+
+    st.divider()
+
+    # ===== C2. SOLO STIPENDIO =====
+    st.markdown("### 💼 Solo Stipendio")
+    st.caption("Lo stipendio da solo copre le tue spese? Spese reali con le condivise alla "
+               "**tua quota** stimata (regole di Spese Condivise); escluse le altre entrate "
+               "(regali, rimborsi, 730…). Solo mesi completi.")
+    sc = salary_coverage(df, data_manager.rules_engine.rules.get('split_config', {}))
+    if sc.empty or sc['stipendio'].sum() <= 0:
+        st.info(f"Nessuna entrata in categoria '{SALARY_CATEGORY}'.")
+    else:
+        last12 = sc.tail(12)
+        bal12 = float(last12['saldo'].sum())
+        covered = int((last12['saldo'] >= 0).sum())
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Saldo ultimi 12 mesi", f"€{bal12:,.0f}", f"€{bal12 / len(last12):+,.0f}/mese",
+                  delta_color="normal")
+        s2.metric("Mesi coperti dallo stipendio", f"{covered}/{len(last12)}")
+        if bal12 < 0:
+            s3.metric("Taglio per stare in pari", f"€{-bal12 / len(last12):,.0f}/mese",
+                      help="Riduzione media delle spese per coprirle col solo stipendio")
+        else:
+            s3.metric("Margine", f"€{bal12 / len(last12):,.0f}/mese",
+                      help="Quanto avanza in media dello stipendio")
+
+        hist = sc.tail(36).copy()
+        hist['media12'] = sc['saldo'].rolling(12, min_periods=6).mean().tail(36)
+        hist['mese'] = hist.index.astype(str)
+        fig_s = go.Figure(go.Bar(x=hist['mese'], y=hist['saldo'], name='Saldo mese',
+                                 marker_color=['#EF5350' if v < 0 else '#66BB6A' for v in hist['saldo']]))
+        fig_s.add_trace(go.Scatter(x=hist['mese'], y=hist['media12'], name='Media mobile 12m',
+                                   mode='lines', line=dict(color='#FFA726', width=3)))
+        fig_s.update_layout(height=320, title="Stipendio − tue spese, mese per mese",
+                            yaxis_title='€', xaxis_title='Mese', legend=dict(orientation='h', y=-0.25))
+        st.plotly_chart(fig_s, use_container_width=True)
+
+        yearly = sc.groupby(sc.index.year).agg(Mesi=('saldo', 'size'), Stipendio=('stipendio', 'sum'),
+                                               Spese=('mie_spese', 'sum'), Saldo=('saldo', 'sum'),
+                                               Coperti=('saldo', lambda v: int((v >= 0).sum())))
+        yearly['Al mese'] = yearly['Saldo'] / yearly['Mesi']
+        yearly['Coperti'] = yearly['Coperti'].astype(str) + '/' + yearly['Mesi'].astype(str)
+        for c in ['Stipendio', 'Spese', 'Saldo', 'Al mese']:
+            yearly[c] = yearly[c].apply(lambda x: f"€{x:,.0f}")
+        yearly.index.name = 'Anno'
+        st.dataframe(yearly[['Stipendio', 'Spese', 'Saldo', 'Al mese', 'Coperti']].sort_index(ascending=False),
+                     use_container_width=True)
 
     st.divider()
 
