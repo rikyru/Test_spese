@@ -162,3 +162,18 @@ def test_ral_by_year_nominal_and_real():
     assert ry.loc[2022, 'crescita'] == pytest.approx(5.0)
     assert ry.loc[2022, 'crescita_reale'] == pytest.approx(0.0)
     assert ry.loc[2023, 'ral_reale'] == pytest.approx(30030 / (1.05 * 1.10))
+
+
+def test_package_by_year_includes_car_from_assignment():
+    from src.salary_insights import ral_by_year, package_by_year
+    monthly = pd.DataFrame({'year': [2024] * 12 + [2025] * 12, 'month': list(range(1, 13)) * 2,
+                            'paga_base': [2000.0] * 24, 'trasferte': [100.0] * 24,
+                            'benefit': [0.0] * 20 + [150.0] * 4})
+    ry = ral_by_year(monthly, 13)
+    cfg = merged_config({'car_value_month': 500, 'car_start': '2025-09', 'marginal_rate': 50})
+    pk = package_by_year(monthly, ry, cfg)
+    assert pk.loc[2024, 'auto_netto'] == 0
+    assert pk.loc[2024, 'pacchetto'] == pytest.approx(26000 + 1200 / 0.5)
+    # 150*12 = 1800 > soglia 1000 → tassato al 50%: 6000 - 900
+    assert pk.loc[2025, 'auto_netto'] == pytest.approx(5100)
+    assert pk.loc[2025, 'pacchetto'] == pytest.approx(26000 + (5100 + 1200) / 0.5)

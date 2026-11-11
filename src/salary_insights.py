@@ -13,6 +13,7 @@ DEFAULT_CONFIG = {
     'marginal_rate': 46,          # % di tasse+contributi su ogni euro lordo in più
     'car_value_month': 0,         # valore di mercato mensile dell'auto aziendale (uso personale)
     'car_tax_month': 0,           # costo fiscale mensile dell'auto (calcolato dalle buste se 0)
+    'car_start': '',              # mese di assegnazione dell'auto (AAAA-MM)
     'welfare_year': 0,
     'benchmark_label': 'Embedded software, Italia 2026 (EgoValeo)',
     'benchmarks': {'Junior': 32500, 'Middle': 40000, 'Senior': 47500, 'Senior (75° pct)': 52500},
@@ -48,6 +49,37 @@ def ral_by_year(comp, mensilita=13, inflation=None):
     out['crescita_reale'] = ((1 + out['crescita'] / 100) / (1 + out['inflazione'] / 100) - 1) * 100
     deflator = (1 + out['inflazione'].fillna(0) / 100).cumprod()
     out['ral_reale'] = out['ral'] / deflator
+    return out
+
+
+FRINGE_THRESHOLD = 1000.0   # soglia annua esente fringe benefit (senza figli a carico)
+
+
+def package_by_year(monthly, ry, cfg):
+    """Pacchetto a fine anno (ritmo annuo, come la RAL): RAL + benefit netti
+    convertiti in lordo equivalente. Benefit: auto aziendale (se assegnata entro
+    fine anno, meno il suo costo fiscale), trasferte esenti (annualizzate sulle
+    buste dell'anno) e welfare."""
+    keep = 1 - cfg['marginal_rate'] / 100.0
+    car_start = pd.Period(cfg['car_start'], freq='M') if cfg.get('car_start') else None
+    rows = []
+    for y, r in ry.iterrows():
+        yb = monthly[monthly['year'] == y]
+        n = max(len(yb), 1)
+        trasferte = float(yb['trasferte'].sum()) * 12 / n
+        car_net = 0.0
+        if car_start is not None and car_start.year <= y and cfg['car_value_month']:
+            if cfg['car_tax_month']:
+                car_tax = cfg['car_tax_month'] * 12
+            else:
+                fringe_year = float(yb['benefit'].iloc[-1] if len(yb) else 0) * 12
+                car_tax = fringe_year * cfg['marginal_rate'] / 100.0 if fringe_year > FRINGE_THRESHOLD else 0.0
+            car_net = max(cfg['car_value_month'] * 12 - car_tax, 0.0)
+        benefits = car_net + trasferte + cfg['welfare_year']
+        rows.append({'year': y, 'auto_netto': car_net, 'trasferte': trasferte,
+                     'pacchetto': r['ral'] + (benefits / keep if keep > 0 else 0.0)})
+    out = pd.DataFrame(rows).set_index('year')
+    out['crescita_pacchetto'] = out['pacchetto'].pct_change() * 100
     return out
 
 

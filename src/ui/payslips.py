@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from src.data_manager import DataManager
 from src.payslip_parser import parse_pdf
-from src.salary_insights import merged_config, ral, pay_events, projection, package_value, ral_by_year
+from src.salary_insights import merged_config, ral, pay_events, projection, package_value, ral_by_year, package_by_year
 
 MONTHS = ["", "Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", "Nov", "Dic"]
 
@@ -226,13 +226,20 @@ def _salary_section(dm, monthly, last, cfg):
     # --- RAL negli anni ---
     st.markdown("#### 📈 RAL negli anni")
     ry = ral_by_year(comp, cfg['mensilita'], cfg.get('inflation'))
+    pk_y = package_by_year(monthly, ry, cfg)
+    show_pk = (pk_y['pacchetto'] - ry['ral']).abs().max() > 1
     first_y = int(ry.index[0])
     fig_r = go.Figure()
     fig_r.add_trace(go.Bar(x=ry.index.astype(str), y=ry['ral'], name='RAL', marker_color='#1565C0',
                            text=[f"€{v/1000:,.1f}k" for v in ry['ral']], textposition='outside'))
+    if show_pk:
+        fig_r.add_trace(go.Bar(x=ry.index.astype(str), y=pk_y['pacchetto'] - ry['ral'],
+                               name='Benefit (lordo equivalente)', marker_color='#81C784',
+                               text=[f"€{v/1000:,.1f}k" for v in pk_y['pacchetto']], textposition='outside'))
+        fig_r.update_traces(selector=dict(name='RAL'), text=None)
     fig_r.add_trace(go.Scatter(x=ry.index.astype(str), y=ry['ral_reale'], name=f"RAL in euro {first_y}",
                                mode='lines+markers', line=dict(color='#E53935', width=3)))
-    fig_r.update_layout(height=340, yaxis_title='€', hovermode='x unified',
+    fig_r.update_layout(height=340, yaxis_title='€', hovermode='x unified', barmode='stack',
                         legend=dict(orientation='h', y=-0.2),
                         title="RAL a fine anno e potere d'acquisto (al netto dell'inflazione)")
     st.plotly_chart(fig_r, use_container_width=True)
@@ -246,6 +253,10 @@ def _salary_section(dm, monthly, last, cfg):
                   f"€{ry['ral'].iloc[-1] - ry['ral'].iloc[0]:+,.0f}")
         g2.metric("Crescita reale", f"{tot_real:+.0f}%", help="Al netto dell'inflazione (parametri)")
         g3.metric("Media annua", f"{cagr:+.1f}%/anno")
+        if show_pk:
+            pk_tot = (pk_y['pacchetto'].iloc[-1] / pk_y['pacchetto'].iloc[0] - 1) * 100
+            st.caption(f"📦 Contando anche i benefit, il pacchetto è passato da €{pk_y['pacchetto'].iloc[0]:,.0f} "
+                       f"a €{pk_y['pacchetto'].iloc[-1]:,.0f} ({pk_tot:+.0f}%).")
     tbl = pd.DataFrame({
         'Anno': ry.index.astype(str),
         'RAL': ry['ral'].map(lambda v: f"€{v:,.0f}"),
@@ -253,9 +264,14 @@ def _salary_section(dm, monthly, last, cfg):
         'Inflazione': ry['inflazione'].map(lambda v: '' if pd.isna(v) else f"{v:.1f}%"),
         'Crescita reale': ry['crescita_reale'].map(lambda v: '' if pd.isna(v) else f"{v:+.1f}%"),
     })
+    if show_pk:
+        tbl['Pacchetto'] = pk_y['pacchetto'].map(lambda v: f"€{v:,.0f}").values
+        tbl['Crescita pacchetto'] = pk_y['crescita_pacchetto'].map(
+            lambda v: '' if pd.isna(v) else f"{v:+.1f}%").values
     st.dataframe(tbl.iloc[::-1], hide_index=True, use_container_width=True)
-    st.caption("RAL = paga base dell'ultima busta dell'anno × mensilità (senza trasferte, premi, benefit). "
-               "Anno in corso: inflazione stimata.")
+    st.caption("RAL = paga base dell'ultima busta dell'anno × mensilità. Pacchetto = RAL + auto aziendale "
+               "(se assegnata entro fine anno, al netto del costo fiscale), trasferte esenti annualizzate e "
+               "welfare, convertiti in lordo con l'aliquota marginale. Anno in corso: inflazione stimata.")
 
     # --- Storia aumenti ---
     ev = pay_events(comp)
@@ -359,6 +375,7 @@ def _config_form(dm, cfg, level):
                               step=25, help="Quanto pagheresti un noleggio equivalente (0 = nessuna auto)")
         cart = c5.number_input("Auto: costo fiscale €/mese (0 = calcolato dalle buste)", 0, 1000,
                                int(cfg['car_tax_month']), step=5)
+        cstart = st.text_input("Auto: assegnata dal (AAAA-MM, vuoto = nessuna)", cfg.get('car_start') or '')
         label = st.text_input("Fasce di mercato: fonte / descrizione", cfg['benchmark_label'])
         bench_txt = st.text_area("Fasce di mercato, una per riga: Nome = RAL",
                                  "\n".join(f"{k} = {v}" for k, v in cfg['benchmarks'].items()))
@@ -374,7 +391,7 @@ def _config_form(dm, cfg, level):
             rules = dm.rules_engine.rules
             rules['payslip_config'] = {
                 'mensilita': int(mens), 'marginal_rate': int(marg), 'welfare_year': int(welf),
-                'car_value_month': int(car), 'car_tax_month': int(cart),
+                'car_value_month': int(car), 'car_tax_month': int(cart), 'car_start': cstart.strip(),
                 'benchmark_label': label, 'benchmarks': _parse_pairs(bench_txt, lambda x: int(float(x))),
                 'future_minimi': fm,
                 'inflation': {int(k): v for k, v in _parse_pairs(infl_txt).items() if k.strip().isdigit()},
