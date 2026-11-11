@@ -274,6 +274,9 @@ class DataManager:
                 uploaded_at TIMESTAMP DEFAULT now()
             )
         """)
+        for col, typ in [('minimo', 'DOUBLE'), ('scatti', 'DOUBLE'), ('edr', 'DOUBLE'),
+                         ('superminimo', 'DOUBLE'), ('livello', 'VARCHAR'), ('prossimo_scatto', 'VARCHAR')]:
+            self.con.execute(f"ALTER TABLE payslips ADD COLUMN IF NOT EXISTS {col} {typ}")
 
         # Migration: Ensure necessity/id column exists (for existing DBs)
         try:
@@ -926,7 +929,8 @@ class DataManager:
 
     PAYSLIP_FIELDS = ['year', 'month', 'kind', 'netto', 'competenze', 'trattenute', 'paga_base',
                       'inps', 'imponibile_irpef', 'irpef_lorda', 'detrazioni', 'ritenute_irpef',
-                      'addizionali', 'rimborso_730', 'trasferte', 'premi', 'benefit', 'benefit_tassati']
+                      'addizionali', 'rimborso_730', 'trasferte', 'premi', 'benefit', 'benefit_tassati',
+                      'minimo', 'scatti', 'edr', 'superminimo', 'livello', 'prossimo_scatto']
 
     def save_payslip(self, rec, filename=''):
         """Salva (o sostituisce) una busta paga analizzata. Ritorna la chiave."""

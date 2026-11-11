@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from src.data_manager import DataManager
 from src.payslip_parser import parse_pdf
+from src.salary_insights import merged_config, ral, pay_events, projection, package_value
 
 MONTHS = ["", "Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", "Nov", "Dic"]
 
@@ -113,6 +114,9 @@ def render_payslips(dm: DataManager):
     m3.metric("Lordo (competenze)", f"€{last['competenze']:,.0f}")
     m4.metric("Tasse e contributi", f"{tax_rate:.0f}%", help="IRPEF + INPS + addizionali sul lordo")
 
+    cfg = merged_config(dm.rules_engine.rules.get('payslip_config'))
+    _salary_section(dm, monthly, last, cfg)
+
     # --- Andamento ---
     st.markdown("### 📈 Andamento")
     fig = go.Figure()
@@ -186,4 +190,158 @@ def render_payslips(dm: DataManager):
         st.caption(f"File: {row['filename']}")
         if st.button("🗑️ Elimina questa busta", key='ps_del'):
             dm.delete_payslip(row['period_key'])
+            st.rerun()
+
+
+EVENT_LABELS = {'contratto': '📜 Aumento contratto', 'assorbito': '🫥 Assorbito dal superminimo',
+                'personale': '🙌 Aumento personale', 'riduzione': '⚠️ Superminimo ridotto',
+                'scatto': '⏫ Scatto anzianità'}
+
+
+def _salary_section(dm, monthly, last, cfg):
+    """RAL, composizione della paga, storia aumenti, proiezione, mercato e pacchetto."""
+    st.markdown("### 💶 RAL e composizione")
+    has_parts = 'minimo' in monthly and monthly['minimo'].fillna(0).gt(0).any()
+    comp = monthly[monthly['minimo'].fillna(0) > 0] if has_parts else monthly.iloc[0:0]
+    ref = comp.iloc[-1] if len(comp) else last
+    my_ral = ral(ref['paga_base'], cfg['mensilita'])
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("RAL", f"€{my_ral:,.0f}", help=f"Paga base €{ref['paga_base']:,.2f} × {cfg['mensilita']} mensilità")
+    r2.metric("Livello", str(ref.get('livello') or '—'))
+    if not has_parts:
+        st.info("Ricarica le buste paga per vedere composizione e aumenti.")
+        return
+    r3.metric("Superminimo", f"€{ref['superminimo']:,.2f}/mese",
+              help="'Acconto futuri aumenti': può assorbire gli aumenti del contratto")
+    r4.metric("Prossimo scatto", str(ref.get('prossimo_scatto') or '—'))
+
+    fig = go.Figure()
+    for col, name, color in [('minimo', 'Minimo contrattuale', '#1565C0'), ('scatti', 'Scatti', '#43A047'),
+                             ('edr', 'EDR', '#9E9E9E'), ('superminimo', 'Superminimo', '#FB8C00')]:
+        fig.add_trace(go.Bar(x=comp['periodo'], y=comp[col], name=name, marker_color=color))
+    fig.update_layout(barmode='stack', height=320, title="Composizione della paga base (lorda mensile)",
+                      yaxis_title='€', hovermode='x unified', legend=dict(orientation='h', y=-0.25))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Storia aumenti ---
+    ev = pay_events(comp)
+    st.markdown("#### 📜 Storia degli aumenti")
+    if ev.empty:
+        st.caption("Nessuna variazione della paga base nelle buste caricate.")
+    else:
+        absorbed = -ev.loc[ev['tipo'] == 'assorbito', 'importo'].sum()
+        if absorbed > 0:
+            st.warning(f"🫥 **€{absorbed:,.2f}/mese di aumenti contrattuali assorbiti** dal superminimo "
+                       f"(circa €{absorbed * cfg['mensilita']:,.0f}/anno lordi che non hai visto).")
+        show = ev.copy()
+        show['Tipo'] = show['tipo'].map(EVENT_LABELS)
+        show['€/mese lordi'] = show['importo'].map(lambda v: f"{v:+,.2f}")
+        show['€/anno'] = show['importo'].map(lambda v: f"{v * cfg['mensilita']:+,.0f}")
+        st.dataframe(show[['periodo', 'Tipo', '€/mese lordi', '€/anno', 'nota']]
+                     .rename(columns={'periodo': 'Mese', 'nota': 'Dettaglio'}).iloc[::-1],
+                     hide_index=True, use_container_width=True)
+
+    # --- Proiezione ---
+    st.markdown("#### 🔮 Prossimi aumenti attesi")
+    proj, sup_left = projection(ref.to_dict(), ev, cfg)
+    if not proj:
+        st.caption("Nessun aumento previsto: aggiungi i minimi futuri del tuo livello nei parametri.")
+    else:
+        keep = 1 - cfg['marginal_rate'] / 100.0
+        rows = [{'Mese': p['periodo'],
+                 'Cosa': '⏫ Scatto anzianità' if p['tipo'] == 'scatto' else '📜 Aumento contratto',
+                 'Lordo/mese': f"€{p['lordo_mese']:,.2f}",
+                 'In busta se assorbito': f"€{p['in_busta']:,.2f}",
+                 'Netto/mese (stima)': f"€{p['in_busta'] * keep:,.0f}",
+                 'Assorbibile': 'sì' if p['assorbibile'] else 'no'} for p in proj]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        at_risk = sum(p['lordo_mese'] - p['in_busta'] for p in proj if p['assorbibile'])
+        if at_risk > 0:
+            st.caption(f"Se l'azienda continua ad assorbire, €{at_risk:,.2f}/mese di aumenti contrattuali "
+                       f"non arriverebbero in busta (superminimo residuo €{sup_left:,.2f}). "
+                       "Leva di negoziazione: superminimo non assorbibile o passaggio di livello senza assorbimento.")
+
+    # --- Mercato e pacchetto ---
+    st.markdown("#### 🧭 Mercato e valore del pacchetto")
+    last12 = monthly.tail(12)
+    trasferte_year = float(last12['trasferte'].sum()) * 12 / max(len(last12), 1)
+    car_tax_year = float(last12['benefit_tassati'].sum()) * cfg['marginal_rate'] / 100.0
+    if cfg['car_tax_month']:
+        car_tax_year = cfg['car_tax_month'] * 12
+    pk = package_value(my_ral, trasferte_year, cfg, car_tax_year)
+
+    bench = cfg['benchmarks'] or {}
+    fig_b = go.Figure()
+    fig_b.add_trace(go.Bar(x=list(bench.values()), y=list(bench.keys()), orientation='h',
+                           marker_color='#B0BEC5', text=[f"€{v:,.0f}" for v in bench.values()],
+                           textposition='inside'))
+    fig_b.add_vline(x=my_ral, line=dict(color='#1565C0', width=3),
+                    annotation_text=f"La tua RAL €{my_ral:,.0f}", annotation_position="top")
+    if pk['ral_equivalente'] > my_ral + 1:
+        fig_b.add_vline(x=pk['ral_equivalente'], line=dict(color='#43A047', width=3, dash='dash'),
+                        annotation_text=f"Pacchetto ≈ €{pk['ral_equivalente']:,.0f}",
+                        annotation_position="bottom")
+    fig_b.update_layout(height=280, title=cfg['benchmark_label'], xaxis_title='RAL €', showlegend=False)
+    st.plotly_chart(fig_b, use_container_width=True)
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Auto (netto/anno)", f"€{pk['auto_netto']:,.0f}",
+              help="Valore di mercato dell'uso personale meno il suo costo fiscale in busta")
+    p2.metric("Trasferte esenti/anno", f"€{pk['trasferte']:,.0f}", help="Ultimi 12 mesi di buste")
+    p3.metric("Welfare/anno", f"€{pk['welfare']:,.0f}")
+    p4.metric("RAL equivalente", f"€{pk['ral_equivalente']:,.0f}",
+              help=f"RAL + benefit netti ÷ (1 − {cfg['marginal_rate']}%): la RAL che servirebbe "
+                   "in un'offerta senza questi benefit")
+    if not cfg['car_value_month']:
+        st.caption("🚗 Imposta nei parametri il valore mensile dell'auto aziendale per includerla nel pacchetto.")
+
+    with st.expander("⚙️ Parametri (fasce di mercato, minimi futuri, benefit)"):
+        _config_form(dm, cfg, ref.get('livello') or 'C3')
+
+
+def _parse_pairs(txt, num=float):
+    """'Nome = valore' per riga → dict (righe non valide ignorate)."""
+    out = {}
+    for line in txt.splitlines():
+        if '=' in line:
+            k, v = line.split('=', 1)
+            try:
+                out[k.strip()] = num(v.strip().replace('€', '').replace('.', '').replace(',', '.')
+                                     if v.count(',') == 1 else v.strip().replace('€', ''))
+            except ValueError:
+                pass
+    return out
+
+
+def _config_form(dm, cfg, level):
+    with st.form("payslip_cfg"):
+        c1, c2, c3 = st.columns(3)
+        mens = c1.number_input("Mensilità", 12, 15, int(cfg['mensilita']))
+        marg = c2.number_input("Aliquota marginale %", 20, 60, int(cfg['marginal_rate']),
+                               help="Tasse + contributi su ogni euro lordo in più (IRPEF 35% + INPS 9,19% + addiz.)")
+        welf = c3.number_input("Welfare €/anno", 0, 10000, int(cfg['welfare_year']), step=50)
+        c4, c5 = st.columns(2)
+        car = c4.number_input("Auto aziendale: valore di mercato €/mese", 0, 3000, int(cfg['car_value_month']),
+                              step=25, help="Quanto pagheresti un noleggio equivalente (0 = nessuna auto)")
+        cart = c5.number_input("Auto: costo fiscale €/mese (0 = calcolato dalle buste)", 0, 1000,
+                               int(cfg['car_tax_month']), step=5)
+        label = st.text_input("Fasce di mercato: fonte / descrizione", cfg['benchmark_label'])
+        bench_txt = st.text_area("Fasce di mercato, una per riga: Nome = RAL",
+                                 "\n".join(f"{k} = {v}" for k, v in cfg['benchmarks'].items()))
+        fut = cfg.get('future_minimi', {}).get(level, {})
+        fut_txt = st.text_area(f"Minimi futuri del livello {level} (AAAA-MM = €/mese)",
+                               "\n".join(f"{k} = {v}" for k, v in fut.items()),
+                               help="Dalle tabelle del CCNL: da aggiornare a ogni rinnovo")
+        if st.form_submit_button("💾 Salva parametri"):
+            fm = dict(cfg.get('future_minimi', {}))
+            fm[level] = _parse_pairs(fut_txt)
+            rules = dm.rules_engine.rules
+            rules['payslip_config'] = {
+                'mensilita': int(mens), 'marginal_rate': int(marg), 'welfare_year': int(welf),
+                'car_value_month': int(car), 'car_tax_month': int(cart),
+                'benchmark_label': label, 'benchmarks': _parse_pairs(bench_txt, lambda x: int(float(x))),
+                'future_minimi': fm,
+            }
+            dm.rules_engine.save_rules(rules)
+            st.success("Parametri salvati.")
             st.rerun()

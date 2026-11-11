@@ -70,6 +70,24 @@ def _first(voci, code):
     return 0.0
 
 
+# Elementi della paga base nell'intestazione Zucchetti (riga etichette + riga valori)
+_PAY_LABELS = [('MINIMO', 'minimo'), ('SCATTI', 'scatti'), ('PRE.PROD', 'edr'),
+               ('Acc. FUT. A.', 'superminimo'), ('SUPERMINIMO', 'superminimo')]
+
+
+def _pay_elements(text):
+    """Minimo contrattuale, scatti, EDR e superminimo (acconto futuri aumenti)."""
+    out = {'minimo': 0.0, 'scatti': 0.0, 'edr': 0.0, 'superminimo': 0.0}
+    m = re.search(r'^(MINIMO[^\n]*)\n((?:' + _NUM + r'[ \t]*)+)$', text, re.M)
+    if not m:
+        return out
+    header, values = m.group(1), re.findall(_NUM, m.group(2))
+    labels = sorted(((header.find(lbl), key) for lbl, key in _PAY_LABELS if lbl in header))
+    for (_, key), v in zip(labels, values):
+        out[key] = to_float(v)
+    return out
+
+
 def parse_payslip(text, filename=''):
     """Ritorna un dict con i campi principali della busta, o None se il testo
     non sembra una busta paga."""
@@ -108,6 +126,8 @@ def parse_payslip(text, filename=''):
         if taxed_benefit < 5:   # arrotondamenti
             taxed_benefit = 0.0
     netto = to_float(net.group(1)) if net else 0.0
+    level = re.search(r'Livello\s+([A-Z]\d|\d+S?)\b', text)
+    next_step = re.search(r'PROSSIMO\S*SCATTO\s+TOTALE\s*\n(\d{1,2})-(20\d\d)', text)
     if not netto and not competenze:
         return None   # PDF senza importi leggibili (es. scansione)
     return {
@@ -128,6 +148,9 @@ def parse_payslip(text, filename=''):
         'premi': round(premi, 2),
         'benefit': round(benefit, 2),
         'benefit_tassati': taxed_benefit,
+        **_pay_elements(text),
+        'livello': level.group(1) if level else None,
+        'prossimo_scatto': f"{next_step.group(2)}-{int(next_step.group(1)):02d}" if next_step else None,
         'voci': voci,
     }
 

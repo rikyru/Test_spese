@@ -98,3 +98,56 @@ def test_year_end_irpef_refund_is_not_addizionale():
     r = parse_payslip(text, '202612_x.pdf')
     assert r['addizionali'] == 85.0
     assert r['ritenute_irpef'] == pytest.approx(660.0 - 100.15)
+
+
+# --- Composizione paga e valutazioni ---
+import pandas as pd
+from src.payslip_parser import _pay_elements
+from src.salary_insights import pay_events, projection, package_value, merged_config, ral
+
+
+def test_pay_elements_header_variants():
+    t1 = "MINIMO SCATTI PRE.PROD Acc. FUT. A.\n2.211,43000 59,28000 3,96000 829,98000\n"
+    assert _pay_elements(t1) == {'minimo': 2211.43, 'scatti': 59.28, 'edr': 3.96, 'superminimo': 829.98}
+    t2 = "MINIMO PRE.PROD Acc. FUT. A.\n1.819,64000 3,96000 330,45000\n"
+    assert _pay_elements(t2) == {'minimo': 1819.64, 'scatti': 0.0, 'edr': 3.96, 'superminimo': 330.45}
+
+
+def _months(rows):
+    return pd.DataFrame(rows, columns=['year', 'month', 'minimo', 'scatti', 'superminimo', 'paga_base'])
+
+
+def test_pay_events_detects_absorption_raise_and_step():
+    m = _months([
+        (2025, 3, 2130.56, 29.64, 511.02, 0), (2025, 4, 2130.56, 59.28, 511.02, 0),   # scatto
+        (2025, 5, 2130.56, 59.28, 883.15, 0),                                           # personale
+        (2025, 6, 2158.26, 59.28, 883.15, 0),                                           # contratto pieno
+        (2026, 6, 2211.43, 59.28, 829.98, 0),                                           # assorbito
+    ])
+    ev = pay_events(m)
+    kinds = list(zip(ev['periodo'], ev['tipo'], ev['importo']))
+    assert ('2025-04', 'scatto', 29.64) in kinds
+    assert ('2025-05', 'personale', 372.13) in kinds
+    assert ('2025-06', 'contratto', 27.7) in kinds
+    assert ('2026-06', 'contratto', 53.17) in kinds and ('2026-06', 'assorbito', -53.17) in kinds
+    assert not ((ev['periodo'] == '2026-06') & (ev['tipo'] == 'riduzione')).any()
+
+
+def test_projection_absorbs_until_superminimo_runs_out():
+    ev = pd.DataFrame([{'periodo': '2025-03', 'tipo': 'scatto', 'importo': 29.64, 'nota': ''}])
+    last = {'minimo': 2211.43, 'superminimo': 100.0, 'livello': 'C3', 'prossimo_scatto': '2027-03'}
+    cfg = merged_config({'future_minimi': {'C3': {'2027-06': 2271.01, '2028-06': 2335.88}}})
+    proj, left = projection(last, ev, cfg, today='2026-11-01')
+    assert [p['periodo'] for p in proj] == ['2027-03', '2027-06', '2028-06']
+    assert proj[0]['in_busta'] == 29.64 and not proj[0]['assorbibile']
+    assert proj[1]['in_busta'] == 0.0                       # 59.58 assorbiti (100 disponibili)
+    assert proj[2]['in_busta'] == pytest.approx(64.87 - 40.42)
+    assert left == pytest.approx(0.0)
+
+
+def test_package_value_and_ral():
+    assert ral(3104.65, 13) == pytest.approx(40360.45)
+    cfg = merged_config({'car_value_month': 500, 'welfare_year': 250, 'marginal_rate': 46})
+    pk = package_value(40000, 2000, cfg, car_tax_year=800)
+    assert pk['auto_netto'] == 5200 and pk['benefit_netti'] == 7450
+    assert pk['ral_equivalente'] == pytest.approx(40000 + 7450 / 0.54)
