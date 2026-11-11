@@ -17,6 +17,8 @@ DEFAULT_CONFIG = {
     'benchmark_label': 'Embedded software, Italia 2026 (EgoValeo)',
     'benchmarks': {'Junior': 32500, 'Middle': 40000, 'Senior': 47500, 'Senior (75° pct)': 52500},
     'future_minimi': {'C3': {'2027-06': 2271.01, '2028-06': 2335.88}},
+    # Inflazione media annua ISTAT NIC (%); l'anno in corso è una stima
+    'inflation': {2022: 8.1, 2023: 5.7, 2024: 1.0, 2025: 1.5, 2026: 1.5},
 }
 
 
@@ -29,6 +31,24 @@ def merged_config(saved):
 
 def ral(paga_base, mensilita=13):
     return float(paga_base or 0) * int(mensilita)
+
+
+def ral_by_year(comp, mensilita=13, inflation=None):
+    """RAL a fine anno (paga base dell'ultima busta dell'anno × mensilità), con
+    crescita nominale, inflazione e crescita reale anno su anno, più la RAL
+    espressa in euro del primo anno (potere d'acquisto)."""
+    inflation = {int(k): float(v) for k, v in (inflation or {}).items()}
+    last = (comp[comp['paga_base'].fillna(0) > 0].sort_values(['year', 'month'])
+            .groupby('year').tail(1).set_index('year'))
+    out = pd.DataFrame({'paga_base': last['paga_base'],
+                        'ral': last['paga_base'] * int(mensilita)})
+    out['crescita'] = out['ral'].pct_change() * 100
+    out['inflazione'] = [inflation.get(int(y)) for y in out.index]
+    out.loc[out.index[0], 'inflazione'] = None
+    out['crescita_reale'] = ((1 + out['crescita'] / 100) / (1 + out['inflazione'] / 100) - 1) * 100
+    deflator = (1 + out['inflazione'].fillna(0) / 100).cumprod()
+    out['ral_reale'] = out['ral'] / deflator
+    return out
 
 
 def pay_events(monthly):

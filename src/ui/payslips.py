@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from src.data_manager import DataManager
 from src.payslip_parser import parse_pdf
-from src.salary_insights import merged_config, ral, pay_events, projection, package_value
+from src.salary_insights import merged_config, ral, pay_events, projection, package_value, ral_by_year
 
 MONTHS = ["", "Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", "Nov", "Dic"]
 
@@ -223,6 +223,40 @@ def _salary_section(dm, monthly, last, cfg):
                       yaxis_title='€', hovermode='x unified', legend=dict(orientation='h', y=-0.25))
     st.plotly_chart(fig, use_container_width=True)
 
+    # --- RAL negli anni ---
+    st.markdown("#### 📈 RAL negli anni")
+    ry = ral_by_year(comp, cfg['mensilita'], cfg.get('inflation'))
+    first_y = int(ry.index[0])
+    fig_r = go.Figure()
+    fig_r.add_trace(go.Bar(x=ry.index.astype(str), y=ry['ral'], name='RAL', marker_color='#1565C0',
+                           text=[f"€{v/1000:,.1f}k" for v in ry['ral']], textposition='outside'))
+    fig_r.add_trace(go.Scatter(x=ry.index.astype(str), y=ry['ral_reale'], name=f"RAL in euro {first_y}",
+                               mode='lines+markers', line=dict(color='#E53935', width=3)))
+    fig_r.update_layout(height=340, yaxis_title='€', hovermode='x unified',
+                        legend=dict(orientation='h', y=-0.2),
+                        title="RAL a fine anno e potere d'acquisto (al netto dell'inflazione)")
+    st.plotly_chart(fig_r, use_container_width=True)
+    n_years = len(ry) - 1
+    if n_years >= 1:
+        tot_nom = (ry['ral'].iloc[-1] / ry['ral'].iloc[0] - 1) * 100
+        tot_real = (ry['ral_reale'].iloc[-1] / ry['ral_reale'].iloc[0] - 1) * 100
+        cagr = ((ry['ral'].iloc[-1] / ry['ral'].iloc[0]) ** (1 / n_years) - 1) * 100
+        g1, g2, g3 = st.columns(3)
+        g1.metric(f"Crescita {first_y}→{int(ry.index[-1])}", f"{tot_nom:+.0f}%",
+                  f"€{ry['ral'].iloc[-1] - ry['ral'].iloc[0]:+,.0f}")
+        g2.metric("Crescita reale", f"{tot_real:+.0f}%", help="Al netto dell'inflazione (parametri)")
+        g3.metric("Media annua", f"{cagr:+.1f}%/anno")
+    tbl = pd.DataFrame({
+        'Anno': ry.index.astype(str),
+        'RAL': ry['ral'].map(lambda v: f"€{v:,.0f}"),
+        'Crescita': ry['crescita'].map(lambda v: '' if pd.isna(v) else f"{v:+.1f}%"),
+        'Inflazione': ry['inflazione'].map(lambda v: '' if pd.isna(v) else f"{v:.1f}%"),
+        'Crescita reale': ry['crescita_reale'].map(lambda v: '' if pd.isna(v) else f"{v:+.1f}%"),
+    })
+    st.dataframe(tbl.iloc[::-1], hide_index=True, use_container_width=True)
+    st.caption("RAL = paga base dell'ultima busta dell'anno × mensilità (senza trasferte, premi, benefit). "
+               "Anno in corso: inflazione stimata.")
+
     # --- Storia aumenti ---
     ev = pay_events(comp)
     st.markdown("#### 📜 Storia degli aumenti")
@@ -328,6 +362,8 @@ def _config_form(dm, cfg, level):
         label = st.text_input("Fasce di mercato: fonte / descrizione", cfg['benchmark_label'])
         bench_txt = st.text_area("Fasce di mercato, una per riga: Nome = RAL",
                                  "\n".join(f"{k} = {v}" for k, v in cfg['benchmarks'].items()))
+        infl_txt = st.text_area("Inflazione media annua % (ISTAT NIC; anno = %)",
+                                "\n".join(f"{k} = {v}" for k, v in sorted(cfg.get('inflation', {}).items())))
         fut = cfg.get('future_minimi', {}).get(level, {})
         fut_txt = st.text_area(f"Minimi futuri del livello {level} (AAAA-MM = €/mese)",
                                "\n".join(f"{k} = {v}" for k, v in fut.items()),
@@ -341,6 +377,7 @@ def _config_form(dm, cfg, level):
                 'car_value_month': int(car), 'car_tax_month': int(cart),
                 'benchmark_label': label, 'benchmarks': _parse_pairs(bench_txt, lambda x: int(float(x))),
                 'future_minimi': fm,
+                'inflation': {int(k): v for k, v in _parse_pairs(infl_txt).items() if k.strip().isdigit()},
             }
             dm.rules_engine.save_rules(rules)
             st.success("Parametri salvati.")

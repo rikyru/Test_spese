@@ -151,3 +151,14 @@ def test_package_value_and_ral():
     pk = package_value(40000, 2000, cfg, car_tax_year=800)
     assert pk['auto_netto'] == 5200 and pk['benefit_netti'] == 7450
     assert pk['ral_equivalente'] == pytest.approx(40000 + 7450 / 0.54)
+
+
+def test_ral_by_year_nominal_and_real():
+    from src.salary_insights import ral_by_year
+    comp = pd.DataFrame({'year': [2021, 2022, 2022, 2023], 'month': [12, 6, 12, 12],
+                         'paga_base': [2000.0, 2000.0, 2100.0, 2310.0]})
+    ry = ral_by_year(comp, 13, {2022: 5.0, 2023: 10.0})
+    assert list(ry['ral']) == [26000.0, 27300.0, 30030.0]
+    assert ry.loc[2022, 'crescita'] == pytest.approx(5.0)
+    assert ry.loc[2022, 'crescita_reale'] == pytest.approx(0.0)
+    assert ry.loc[2023, 'ral_reale'] == pytest.approx(30030 / (1.05 * 1.10))
