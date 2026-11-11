@@ -9,6 +9,7 @@ from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
 from src.ui.analysis import real_income, real_expenses, in_progress_period, avg_monthly, AVG_BASIS_NOTE
 from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
+from src.ui.wants_envelope import render_wants_envelope
 
 def render_dashboard(data_manager):
     st.header("Dashboard")
@@ -28,6 +29,9 @@ def render_dashboard(data_manager):
         df['date'] = pd.to_datetime(df['date'])
         df['year'] = df['date'].dt.year
         df['month'] = df['date'].dt.month
+
+        # Busta desideri del mese corrente (indipendente dai filtri)
+        render_wants_envelope(df, re)
 
         # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
         min_date = df['date'].min().date()
