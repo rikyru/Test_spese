@@ -17,7 +17,7 @@ def _my_share_pct(category, tags, conf):
 
 
 def render_split(data_manager: DataManager):
-    st.header("💞 Expense Splitting (Granular)")
+    st.header("💞 Spese condivise")
     
     # Load Config
     rules_engine = data_manager.rules_engine
@@ -35,28 +35,28 @@ def render_split(data_manager: DataManager):
     if 'rules' not in conf: conf['rules'] = [] # List of {type, match, my_share}
     if 'loan_tags' not in conf: conf['loan_tags'] = ['prestito', 'loan', 'anticipo']
     
-    tab_report, tab_loans, tab_settings = st.tabs(["📅 Monthly Report", "💸 Prestiti / Crediti", "⚙️ Rules Configuration"])
+    tab_report, tab_loans, tab_settings = st.tabs(["📅 Resoconto del mese", "💸 Prestiti / Crediti", "⚙️ Rules Configuration"])
     
     # --- SETTINGS TAB ---
     with tab_settings:
-        st.subheader("General Settings")
+        st.subheader("Impostazioni generali")
         with st.form("general_split_config"):
-            new_name = st.text_input("Partner Name", conf['partner_name'])
-            new_def_pct = st.slider("Default My Share (%)", 0, 100, conf['default_share_pct'], help="Fallback if no specific rule matches.")
-            new_loan_tags = st.text_input("Loan Tags (100% Owed)", ", ".join(conf['loan_tags']))
+            new_name = st.text_input("Nome partner", conf['partner_name'])
+            new_def_pct = st.slider("La mia quota di default (%)", 0, 100, conf['default_share_pct'], help="Fallback if no specific rule matches.")
+            new_loan_tags = st.text_input("Tag prestito (dovuti al 100%)", ", ".join(conf['loan_tags']))
             
-            if st.form_submit_button("Save General"):
+            if st.form_submit_button("Salva"):
                 conf['partner_name'] = new_name
                 conf['default_share_pct'] = new_def_pct
                 conf['loan_tags'] = [t.strip() for t in new_loan_tags.split(',') if t.strip()]
                 full_rules['split_config'] = conf
                 rules_engine.save_rules(full_rules)
-                st.success("Saved!")
+                st.success("Salvato!")
                 st.rerun()
                 
         st.divider()
-        st.subheader("Specific Splitting Rules")
-        st.info("Define specific shares for categories or tags. Rules are applied in order (Tag > Category > Default).")
+        st.subheader("Regole di divisione")
+        st.info("Quote specifiche per categoria o tag. Ordine di applicazione: Tag > Categoria > Default.")
         
         # Rule Editor
         rules_list = conf.get('rules', [])
@@ -94,20 +94,20 @@ def render_split(data_manager: DataManager):
                 st.rerun()
                     
         # Add New Rule Form
-        with st.expander("➕ Add New Rule"):
+        with st.expander("➕ Nuova regola"):
             with st.form("add_rule_form"):
                 r_type = st.selectbox("Type", ["Category", "Tag"])
                 
                 if r_type == "Category":
                     avail_cats = data_manager.get_unique_categories()
-                    r_match = st.selectbox("Select Category", avail_cats)
+                    r_match = st.selectbox("Categoria", avail_cats)
                 else:
-                    r_match_input = st.text_input("Tag Name (e.g. luce)", placeholder="Enter tag without #")
+                    r_match_input = st.text_input("Tag (es. luce)", placeholder="Enter tag without #")
                     r_match = r_match_input.strip().lower()
                     
-                r_share = st.slider("My Share % for this", 0, 100, 50)
+                r_share = st.slider("La mia quota %", 0, 100, 50)
                 
-                if st.form_submit_button("Add Rule"):
+                if st.form_submit_button("Aggiungi regola"):
                     if r_match:
                         # Check duplicate
                         exists = any(r['type'] == r_type.lower() and r['match'] == r_match for r in rules_list)
@@ -123,7 +123,7 @@ def render_split(data_manager: DataManager):
                         else:
                             st.error("Rule already exists!")
                     else:
-                        st.error("Please define a match value.")
+                        st.error("Indica la categoria o il tag.")
 
     # --- REPORT TAB ---
     with tab_report:
@@ -173,7 +173,7 @@ def render_split(data_manager: DataManager):
 
         # Filter Data
         if df_all.empty:
-            st.info("No transactions found.")
+            st.info("Nessun movimento trovato.")
             return
 
         df_all['date'] = pd.to_datetime(df_all['date'])
@@ -181,7 +181,7 @@ def render_split(data_manager: DataManager):
         df_m = df_all[mask].copy()
         
         if df_m.empty:
-            st.warning("No expenses found.")
+            st.warning("Nessuna spesa trovata.")
             return
 
         # Initialize Debug Columns to avoid KeyError
@@ -388,9 +388,9 @@ def render_split(data_manager: DataManager):
                             st.rerun()
 
         # Breakdown
-        st.subheader("Details")
+        st.subheader("Dettagli")
         
-        tab_det, tab_debug = st.tabs(["View Data", "Debug Inspector"])
+        tab_det, tab_debug = st.tabs(["Dati", "Debug Inspector"])
         
         with tab_det:
             if split_transactions:
@@ -421,12 +421,12 @@ def render_split(data_manager: DataManager):
                         st.rerun()
                 
         with tab_debug:
-            st.warning("Use this to check why a transaction is (or isn't) being split.")
+            st.warning("Serve a capire perché un movimento viene (o non viene) diviso.")
             debug_cols = ['date', 'description', 'category', 'amount', 'debug_tags_clean', 'debug_log']
             st.dataframe(df_m[debug_cols], use_container_width=True)
             
         # Generatore Messaggio
-        st.subheader("📲 WhatsApp Export")
+        st.subheader("📲 Messaggio WhatsApp")
         
         msg_lines = [f"📊 *Conti {sel_month}/{sel_year}*", ""]
         # Saldo in testa, chiaro e direzionale

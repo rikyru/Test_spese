@@ -74,13 +74,13 @@ except Exception:
     pass
 
 # Global Search — overrides page to Transactions
-global_search = st.sidebar.text_input("🔍 Search", placeholder="Cerca transazioni...")
+global_search = st.sidebar.text_input("🔍 Cerca", placeholder="Cerca transazioni...")
 if global_search:
     st.session_state['global_search'] = global_search
 elif 'global_search' not in st.session_state:
     st.session_state['global_search'] = ''
 
-page = st.sidebar.radio("Navigate", ["Dashboard", "Transactions", "Recurring Expenses", "Shared Expenses", "Analysis", "Buste Paga", "Tag Manager", "Import", "Settings"])
+page = st.sidebar.radio("Sezione", ["Dashboard", "Movimenti", "Ricorrenti", "Spese condivise", "Analisi", "Buste Paga", "Tag", "Importa", "Impostazioni"])
 
 # If there's an active search, force Transactions page
 if global_search:
@@ -279,19 +279,19 @@ with st.sidebar.expander("💾 Backup & Ripristino", expanded=False):
 
 if page == "Dashboard":
     render_dashboard(dm)
-elif page == "Transactions":
+elif page == "Movimenti":
     render_transactions(dm)
-elif page == "Recurring Expenses":
+elif page == "Ricorrenti":
     render_recurring(dm)
-elif page == "Shared Expenses":
+elif page == "Spese condivise":
     render_split(dm)
-elif page == "Analysis":
+elif page == "Analisi":
     render_analysis(dm)
 elif page == "Buste Paga":
     render_payslips(dm)
-elif page == "Tag Manager":
+elif page == "Tag":
     render_tag_manager(dm)
-elif page == "Import":
+elif page == "Importa":
     render_importer(dm)
-elif page == "Settings":
+elif page == "Impostazioni":
     render_settings(dm)

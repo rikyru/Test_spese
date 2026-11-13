@@ -8,7 +8,7 @@ from src.ocr_engine import OCREngine
 from src.ui.styling import get_chart_colors
 
 def render_importer(data_manager: DataManager):
-    st.header("Import Data")
+    st.header("📥 Importa dati")
     
     # Check for Pending Imports — derive data dir from DB_PATH (same as DataManager)
     db_path = os.environ.get('DB_PATH', 'finance_data/finance.duckdb')
@@ -35,8 +35,8 @@ def render_importer(data_manager: DataManager):
     
     if pending_data:
         with tabs[0]:
-            st.subheader(f"⚠️ Pending Review ({len(pending_data)} items)")
-            st.info("These transactions were detected from screenshots/chats. Please review and confirm them.")
+            st.subheader(f"⚠️ Da controllare ({len(pending_data)} movimenti)")
+            st.info("Movimenti rilevati da screenshot/chat: controllali e confermali.")
             
             # Wizard style: Show one at a time or list? 
             # List is better for overview, but wizard ensures quality.
@@ -46,7 +46,7 @@ def render_importer(data_manager: DataManager):
             # Let's show a table of all, and an editor for the "Current" one (first in list)
             
             if not pending_data:
-                st.success("All caught up!")
+                st.success("Tutto controllato!")
             else:
                 # Current item to review (always index 0)
                 current_tx = pending_data[0]
@@ -56,8 +56,8 @@ def render_importer(data_manager: DataManager):
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        p_date = st.date_input("Date", pd.to_datetime(current_tx.get('date')).date())
-                        p_amount = st.number_input("Amount", value=float(current_tx.get('amount')), step=0.01)
+                        p_date = st.date_input("Data", pd.to_datetime(current_tx.get('date')).date())
+                        p_amount = st.number_input("Importo", value=float(current_tx.get('amount')), step=0.01)
                         p_type = "Expense" if p_amount < 0 else "Income"
                         
                     with col2:
@@ -69,18 +69,18 @@ def render_importer(data_manager: DataManager):
                              # Quick check history
                              pass 
                         
-                        p_cat = st.selectbox("Category", cats, index=0)
+                        p_cat = st.selectbox("Categoria", cats, index=0)
                         if p_cat == "New...":
-                            p_cat = st.text_input("New Category Name")
+                            p_cat = st.text_input("Nome nuova categoria")
                             
                         # Wallet
                         accounts = data_manager.get_unique_accounts()
-                        p_account = st.selectbox("Wallet / Account", accounts if accounts else ["Cash"])
+                        p_account = st.selectbox("Conto", accounts if accounts else ["Cash"])
                         
                     # Tags
-                    p_tags_str = st.text_input("Tags (comma separated)", value="")
+                    p_tags_str = st.text_input("Tag (separati da virgola)", value="")
                     
-                    p_nec = st.radio("Necessity", ["Need", "Want"], horizontal=True)
+                    p_nec = st.radio("Necessità", ["Need", "Want"], horizontal=True)
                     
                     col_b1, col_b2 = st.columns([1, 1])
                     if col_b1.button("✅ Confirm & Add", type="primary", use_container_width=True):
@@ -118,14 +118,14 @@ def render_importer(data_manager: DataManager):
                          st.rerun()
                          
                 st.write("---")
-                st.caption(f"Remaining items: {len(pending_data)}")
+                st.caption(f"Ancora da controllare: {len(pending_data)}")
                 if len(pending_data) > 1:
-                    with st.expander("View Upcoming Queue"):
+                    with st.expander("Vedi i prossimi in coda"):
                          st.table(pd.DataFrame(pending_data[1:]))
 
     with tabs[tab_offset]:
-        st.subheader("Import Backup/Export")
-        uploaded_file = st.file_uploader("Upload ZIP file with CSVs", type="zip")
+        st.subheader("Importa backup / export")
+        uploaded_file = st.file_uploader("Carica il file ZIP con i CSV", type="zip")
         
         respect_cat = st.checkbox(
             "Rispetta le categorie del file (usa le regole solo per quelle vuote)",
@@ -140,7 +140,7 @@ def render_importer(data_manager: DataManager):
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
 
-            if st.button("Process Import"):
+            if st.button("Importa"):
                 with st.spinner("Importing and normalizing..."):
                     success, msg = data_manager.ingest_zip(temp_path, respect_existing_category=respect_cat)
                     if success:
@@ -151,11 +151,11 @@ def render_importer(data_manager: DataManager):
                         except:
                             pass
                     else:
-                        st.error(f"Error: {msg}")
+                        st.error(f"Errore: {msg}")
 
     with tabs[tab_offset + 1]:
-        st.subheader("Import Utility Bill")
-        pdf_file = st.file_uploader("Upload PDF Bill", type="pdf")
+        st.subheader("Importa bolletta")
+        pdf_file = st.file_uploader("Carica la bolletta PDF", type="pdf")
         
         if pdf_file:
             if 'bill_data' not in st.session_state or st.session_state.get('last_pdf') != pdf_file.name:
@@ -169,14 +169,14 @@ def render_importer(data_manager: DataManager):
             if "error" in data:
                 st.error(data["error"])
             else:
-                st.success(f"Detected: {data.get('bill_type')} Bill")
+                st.success(f"Rilevata bolletta: {data.get('bill_type')}")
                 
                 with st.form("bill_confirm_form"):
                     col1, col2 = st.columns(2)
                     b_date = col1.date_input("Date", data.get('date'))
                     b_amount = col2.number_input("Amount (Expense)", value=abs(data.get('amount', 0.0)), step=0.01)
                     
-                    b_desc = st.text_input("Description", data.get('description'))
+                    b_desc = st.text_input("Descrizione", data.get('description'))
                     
                     # Category selection
                     cats = data_manager.get_unique_categories() + ["Fatture"]
@@ -187,16 +187,16 @@ def render_importer(data_manager: DataManager):
                     if "Fatture" in cats:
                         default_cat_idx = cats.index("Fatture")
                     
-                    b_cat = st.selectbox("Category", cats, index=default_cat_idx)
+                    b_cat = st.selectbox("Categoria", cats, index=default_cat_idx)
                     
                     # Wallet selection
                     accounts = data_manager.get_unique_accounts()
-                    b_account = st.selectbox("Pay from Account", accounts if accounts else ["Cash"])
+                    b_account = st.selectbox("Pagata dal conto", accounts if accounts else ["Cash"])
                     
                     # Tags
-                    b_tags = st.text_input("Tags (comma separated)", ", ".join(data.get('tags', [])))
+                    b_tags = st.text_input("Tag (separati da virgola)", ", ".join(data.get('tags', [])))
                     
-                    submitted = st.form_submit_button("Import Bill Transaction")
+                    submitted = st.form_submit_button("Registra la bolletta")
                     
                     if submitted:
                         # Prepare row
@@ -223,18 +223,18 @@ def render_importer(data_manager: DataManager):
                             del st.session_state.bill_data
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error saving: {e}")
+                            st.error(f"Errore nel salvataggio: {e}")
 
     with tabs[tab_offset + 2]:
-        st.subheader("Import from Screenshot")
-        st.info("Upload a screenshot of your bank app or transaction list. The app will try to read the text (OCR).")
+        st.subheader("Importa da screenshot")
+        st.info("Carica uno screenshot dell'app della banca o della lista movimenti: l'app prova a leggerne il testo (OCR).")
         
-        uploaded_img = st.file_uploader("Upload Screenshot", type=["png", "jpg", "jpeg"])
+        uploaded_img = st.file_uploader("Carica screenshot", type=["png", "jpg", "jpeg"])
         
         if uploaded_img:
             st.image(uploaded_img, caption="Preview", width=300)
             
-            if st.button("🔍 Process Screenshot"):
+            if st.button("🔍 Leggi screenshot"):
                 status = st.status("Processing screenshot...", expanded=True)
                 try:
                     status.write("⏳ Loading OCR engine (first run downloads models ~100MB)...")
@@ -247,7 +247,7 @@ def render_importer(data_manager: DataManager):
                     
                     if results:
                         status.update(label="✅ Done!", state="complete")
-                        st.success(f"Found {len(results)} transactions!")
+                        st.success(f"Trovati {len(results)} movimenti!")
                         
                         # Append to pending
                         current_pending = []
@@ -267,14 +267,14 @@ def render_importer(data_manager: DataManager):
                         st.rerun()
                     else:
                         status.update(label="⚠️ No transactions found", state="complete")
-                        st.warning("No transactions found. Try cropping the image to just the list.")
+                        st.warning("Nessun movimento trovato. Prova a ritagliare l'immagine sulla sola lista.")
                         with st.expander("Show Debug (Raw Text)"):
                             st.write(raw_text)
-                            st.caption("If you see the text here but it wasn't captured, copy this and send it to me!")
+                            st.caption("Se qui vedi il testo ma i movimenti non sono stati letti, copialo e segnalalo.")
                         
                 except Exception as e:
                     import traceback
                     status.update(label="❌ Error", state="error")
-                    st.error(f"OCR Error: {e}")
-                    with st.expander("Error Details"):
+                    st.error(f"Errore OCR: {e}")
+                    with st.expander("Dettagli errore"):
                         st.code(traceback.format_exc())

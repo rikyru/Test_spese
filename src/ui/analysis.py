@@ -170,6 +170,41 @@ def spending_forecast(monthly, window=AVG_WINDOW_MONTHS, backtest_months=18):
     }
 
 
+def typical_income(df, window=AVG_WINDOW_MONTHS):
+    """Entrata TIPICA mensile: mediana degli ultimi `window` mesi completi (robusta a
+    tredicesima, regali, rimborsi 730). Unica definizione usata in tutta l'app."""
+    s = monthly_totals(df, 'income').tail(window)
+    return float(s.median()) if len(s) else 0.0
+
+
+def category_overview(df, ref_df=None, today=None, window=AVG_WINDOW_MONTHS):
+    """Per categoria di spesa reale: media mensile sugli ultimi `window` mesi completi
+    (mesi a zero inclusi), in quanti mesi c'è stata spesa, ultimo mese completo e
+    mese in corso finora. Stessa base per Previsioni e Smart Insights."""
+    ref = df if ref_df is None else ref_df
+    exp = real_expenses(df)
+    end = last_complete_period(ref)
+    if exp.empty or end is None:
+        return pd.DataFrame()
+    exp = exp.assign(p=pd.to_datetime(exp['date']).dt.to_period('M'), a=exp['amount'].abs())
+    months = pd.period_range(end - window + 1, end, freq='M')
+    ip = in_progress_period(ref)
+    rows = []
+    for cat, g in exp.groupby('category'):
+        by_m = g.groupby('p')['a'].sum().reindex(months, fill_value=0.0)
+        now = float(g.loc[g['p'] == ip, 'a'].sum()) if ip is not None else 0.0
+        if by_m.sum() == 0 and now == 0:
+            continue
+        rows.append({'categoria': cat, 'media': float(by_m.mean()), 'mesi_con_spesa': int((by_m > 0).sum()),
+                     'ultimo': float(by_m.iloc[-1]), 'mese_in_corso': now})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out['n_mesi'] = len(months)
+    out['scarto_ultimo'] = out['ultimo'] - out['media']
+    return out.sort_values('media', ascending=False).reset_index(drop=True)
+
+
 def thirteenth_estimate(data_manager):
     """Netto dell'ultima tredicesima dalle buste caricate (0 se non disponibile)."""
     try:
@@ -344,150 +379,52 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     total_expenses = expenses['abs_amount'].sum()
     total_income = income['amount'].sum() if not income.empty else 0
 
-    # ====== 1. BURN RATE ======
-    st.markdown("### 🔥 Velocità di Spesa")
-
-    last_month_period = expenses['month_year'].max()
-    last_month_exp = expenses[expenses['month_year'] == last_month_period]
-
-    if not last_month_exp.empty:
-        days_in_month = calendar.monthrange(last_month_period.year, last_month_period.month)[1]
-        ip = in_progress_period(full_df)
-        partial_note = ""
-        if ip is not None and last_month_period == ip:
-            # Mese in corso: dividi per i giorni TRASCORSI, non per il mese intero
-            days_in_period = max(int(last_month_exp['date'].dt.day.max()), 1)
-            partial_note = f" · mese in corso ({days_in_period}g)"
-        else:
-            days_in_period = days_in_month
-        daily_burn = last_month_exp['abs_amount'].sum() / days_in_period
-
-        prev_month_period = last_month_period - 1
-        prev_month_exp = expenses[expenses['month_year'] == prev_month_period]
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Spesa Media Giornaliera", f"€{daily_burn:,.2f}", help=f"Su {days_in_period} giorni{partial_note}")
-        col2.metric("Totale Mese Corrente", f"€{last_month_exp['abs_amount'].sum():,.2f}")
-
-        if not prev_month_exp.empty:
-            prev_days = calendar.monthrange(prev_month_period.year, prev_month_period.month)[1]
-            prev_burn = prev_month_exp['abs_amount'].sum() / prev_days
-            delta = daily_burn - prev_burn
-            col3.metric("vs Mese Precedente", f"€{prev_burn:,.2f}/g",
-                        delta=f"{delta:+.2f} €/g", delta_color="inverse")
-        else:
-            col3.metric("vs Mese Precedente", "N/A")
+    # ====== 1. MESE IN CORSO (indipendente dal filtro, come in Dashboard) ======
+    today = pd.Timestamp.today().normalize()
+    cur_p = pd.Period(today, freq='M')
+    cur_rows = all_expenses[all_expenses['month_year'] == cur_p]
+    st.markdown(f"### 📅 {MONTH_ABBR[cur_p.month].capitalize()} {cur_p.year}: com'è andata finora")
+    if not cur_rows.empty:
+        spent = float(cur_rows['abs_amount'].sum())
+        prev_df, p_lbl = comparable_prev_month(full_df, cur_p.year, cur_p.month, today)
+        prev_same = float(real_expenses(prev_df)['amount'].abs().sum())
+        avg12 = avg_monthly(full_df)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Speso finora", f"€{spent:,.0f}", help=f"€{spent / today.day:,.0f} al giorno su {today.day} giorni")
+        c2.metric(f"Stesso periodo mese prima", f"€{prev_same:,.0f}",
+                  delta=(f"{spent - prev_same:+,.0f}€ questo mese" if prev_same else None), delta_color="inverse")
+        c3.metric("Spesa media mensile", f"€{avg12:,.0f}", help=AVG_BASIS_NOTE)
+        st.caption(f"Confronto equo: 1–{today.day} di questo mese vs 1–{today.day} del mese prima. "
+                   "Il mese intero si confronta con la media 12 mesi (le grosse spese fisse come mutuo e "
+                   "condominio spesso arrivano a fine mese).")
+    else:
+        st.info("Nessuna spesa registrata nel mese in corso.")
 
     st.divider()
 
-    # ====== 2. MONTH OVER MONTH ======
-    st.markdown("### 📊 Confronto Mese su Mese")
-
-    all_monthly_totals = all_expenses.groupby('month_year')['abs_amount'].sum().sort_index()
-
-    if len(all_monthly_totals) >= 2:
-        curr_period = all_monthly_totals.index[-1]
-        prev_period = all_monthly_totals.index[-2]
-        curr_rows = all_expenses[all_expenses['month_year'] == curr_period]
-        prev_rows = all_expenses[all_expenses['month_year'] == prev_period]
-
-        cutoff_day = int(curr_rows['date'].dt.day.max())
-        days_curr = calendar.monthrange(curr_period.year, curr_period.month)[1]
-        is_partial = cutoff_day < days_curr
-
-        curr_total = curr_rows['abs_amount'].sum()
-        prev_full = prev_rows['abs_amount'].sum()
-
-        if is_partial:
-            # Confronto EQUO: stesso intervallo di giorni (1 → cutoff_day)
-            prev_same = prev_rows[prev_rows['date'].dt.day <= cutoff_day]['abs_amount'].sum()
-            diff = curr_total - prev_same
-            pct = (diff / prev_same * 100) if prev_same > 0 else 0
-            if diff > 0:
-                st.warning(f"📈 Dal 1 al {cutoff_day} hai speso **€{abs(diff):,.2f} in più** "
-                           f"rispetto allo stesso periodo di {prev_period} (+{pct:.1f}%)")
-            else:
-                st.success(f"📉 Dal 1 al {cutoff_day} hai speso **€{abs(diff):,.2f} in meno** "
-                           f"rispetto allo stesso periodo di {prev_period} ({pct:.1f}%)")
-            proj_full = curr_total / cutoff_day * days_curr if cutoff_day else curr_total
-            st.caption(f"Proiezione fine mese ~€{proj_full:,.0f}  ·  {prev_period} intero: €{prev_full:,.0f}")
-            comp_data = pd.DataFrame({
-                'Periodo': [f"{prev_period} (1–{cutoff_day})", f"{curr_period} (1–{cutoff_day})"],
-                'Spese': [prev_same, curr_total],
-            })
-        else:
-            diff = curr_total - prev_full
-            pct = (diff / prev_full * 100) if prev_full > 0 else 0
-            if diff > 0:
-                st.warning(f"📈 Hai speso **€{abs(diff):,.2f} in più** rispetto a {prev_period} (+{pct:.1f}%)")
-            else:
-                st.success(f"📉 Hai speso **€{abs(diff):,.2f} in meno** rispetto a {prev_period} ({pct:.1f}%)")
-            comp_data = pd.DataFrame({
-                'Periodo': [str(prev_period), str(curr_period)],
-                'Spese': [prev_full, curr_total],
-            })
-
-        colors = ['#636EFA', '#EF553B' if diff > 0 else '#00CC96']
-        fig_comp = px.bar(comp_data, x='Periodo', y='Spese', color='Periodo',
-                          color_discrete_sequence=colors, text_auto='.2s')
-        fig_comp.update_layout(showlegend=False, height=300)
-        st.plotly_chart(fig_comp, use_container_width=True)
+    # ====== 2. CATEGORIE FUORI DAL SOLITO (stessa base di Previsioni) ======
+    st.markdown("### 📈 Categorie fuori dal solito")
+    co = category_overview(full_df)
+    if co.empty:
+        st.info("Servono più mesi completi di dati.")
     else:
-        st.info("Servono almeno 2 mesi di dati per il confronto.")
-
-    st.divider()
-
-    # ====== 3. CATEGORY TRENDS ======
-    st.markdown("### 📈 Trend Categorie")
-
-    # Escludi il mese in corso (parziale): confrontare un mese non concluso con i
-    # precedenti pieni farebbe sembrare tutte le categorie in calo.
-    _ip = in_progress_period(full_df)
-    months_complete = [m for m in sorted(all_expenses['month_year'].unique()) if m != _ip]
-
-    if len(months_complete) >= 2:
-        last_3_months = months_complete[-3:]
-        n_prev = len(last_3_months) - 1
-        recent = all_expenses[all_expenses['month_year'].isin(last_3_months)]
-        cat_monthly = recent.groupby(['month_year', 'category'])['abs_amount'].sum().reset_index()
-        last_month = last_3_months[-1]
-
-        trends = []
-        for cat in cat_monthly['category'].unique():
-            cat_data = cat_monthly[cat_monthly['category'] == cat].sort_values('month_year')
-            # richiede il mese corrente completo + almeno un mese precedente
-            if cat_data['month_year'].iloc[-1] != last_month or len(cat_data) < 2:
-                continue
-            last_val = float(cat_data['abs_amount'].iloc[-1])
-            avg_prev = float(cat_data['abs_amount'].iloc[:-1].mean())
-            change_pct = ((last_val - avg_prev) / avg_prev) * 100 if avg_prev > 0 else 0
-
-            if change_pct > 15:
-                badge = "🔴 ↑"
-            elif change_pct < -15:
-                badge = "🟢 ↓"
-            else:
-                badge = "⚪ →"
-
-            trends.append({
-                'Categoria': cat,
-                'Trend': badge,
-                '_change_num': change_pct,
-                'Ultimo Mese': f"€{last_val:,.0f}",
-                f'Media {n_prev} mesi': f"€{avg_prev:,.0f}",
-                'Variazione': f"{change_pct:+.0f}%"
-            })
-
-        st.caption(f"Ultimo mese completo **{last_month}** vs media dei {n_prev} precedenti "
-                   "(mese in corso escluso).")
-        if trends:
-            trends_df = pd.DataFrame(trends).sort_values('_change_num', ascending=False)
-            display_cols = ['Categoria', 'Trend', 'Ultimo Mese', f'Media {n_prev} mesi', 'Variazione']
-            st.dataframe(trends_df[display_cols], use_container_width=True, hide_index=True)
+        last_p = last_complete_period(full_df)
+        thr = co['media'].mul(0.25).clip(lower=50)
+        moved = co[co['scarto_ultimo'].abs() > thr].copy()
+        st.caption(f"Ultimo mese completo (**{MONTH_ABBR[last_p.month]} {last_p.year}**) confrontato con la "
+                   f"media mensile degli ultimi {int(co['n_mesi'].iloc[0])} mesi. Solo le categorie che si "
+                   "scostano di oltre il 25% (e almeno €50).")
+        if moved.empty:
+            st.success("Tutte le categorie nella norma.")
         else:
-            st.info("Nessuna categoria con dati sufficienti per il confronto.")
-    else:
-        st.info("Servono almeno 2 mesi completi di dati per i trend.")
+            moved = moved.sort_values('scarto_ultimo', ascending=False)
+            st.dataframe(pd.DataFrame({
+                'Categoria': moved['categoria'],
+                'Tendenza': moved['scarto_ultimo'].map(lambda v: "🔴 sopra" if v > 0 else "🟢 sotto"),
+                f"{MONTH_ABBR[last_p.month].capitalize()}": moved['ultimo'].map(lambda v: f"€{v:,.0f}"),
+                'Media/mese': moved['media'].map(lambda v: f"€{v:,.0f}"),
+                'Differenza': moved['scarto_ultimo'].map(lambda v: f"{v:+,.0f}€"),
+            }), use_container_width=True, hide_index=True)
 
     st.divider()
 
@@ -506,7 +443,7 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
             mode="gauge+number+delta",
             value=savings_rate,
             number={'suffix': '%', 'font': {'size': 40}},
-            title={'text': 'Savings Rate', 'font': {'size': 18}},
+            title={'text': 'Tasso di risparmio', 'font': {'size': 18}},
             gauge={
                 'axis': {'range': [-20, 60], 'ticksuffix': '%'},
                 'bar': {'color': '#2196F3'},
@@ -607,7 +544,8 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
                     if freq == 'Yearly': return amt / 12
                     if freq == 'Weekly': return amt * 4.33
                     return amt
-                rec_monthly_total = rec_df.apply(to_monthly, axis=1).sum()
+                rec_df = rec_df[rec_df['tags'].apply(_is_subscription)]
+                rec_monthly_total = rec_df.apply(to_monthly, axis=1).sum() if not rec_df.empty else 0.0
                 rec_names = rec_df['name'].tolist()
         except Exception:
             pass
@@ -631,10 +569,11 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
         sub_breakdown['Media'] = sub_breakdown['Media'].apply(lambda x: f"€{x:,.2f}")
         st.dataframe(sub_breakdown, use_container_width=True, hide_index=True)
     else:
-        st.info('Nessun abbonamento trovato con tag "abbonamento". Tagga le transazioni per tracciarle.')
+        st.info("Nessun abbonamento trovato nel periodo. Sono riconosciuti dai tag dei servizi "
+                "(netflix, spotify, disney, nowtv, prime, icloud, drive, plex…).")
 
     if rec_monthly_total > 0:
-        st.info(f"📋 **Ricorrenti configurate:** €{rec_monthly_total:,.2f}/mese ({len(rec_names)} voci: {', '.join(rec_names[:5])}{'...' if len(rec_names) > 5 else ''})")
+        st.info(f"📋 **Abbonamenti tra le ricorrenti:** €{rec_monthly_total:,.2f}/mese ({len(rec_names)} voci: {', '.join(rec_names[:6])}{'...' if len(rec_names) > 6 else ''})")
 
     st.divider()
 
@@ -649,29 +588,41 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
                   'Thursday': 'Giovedì', 'Friday': 'Venerdì', 'Saturday': 'Sabato', 'Sunday': 'Domenica'}
 
     expenses['weekday'] = expenses['date'].dt.day_name()
-    weekday_spend = expenses.groupby('weekday')['abs_amount'].agg(['sum', 'mean', 'count']).reindex(weekday_order)
+    # Spesa media per GIORNO: totale di quel giorno della settimana / quante volte
+    # quel giorno è capitato nel periodo (non la media per transazione)
+    all_days = pd.date_range(expenses['date'].min().normalize(), expenses['date'].max().normalize(), freq='D')
+    n_days = pd.Series(all_days.day_name()).value_counts()
+    weekday_spend = expenses.groupby('weekday')['abs_amount'].agg(['sum', 'count']).reindex(weekday_order)
+    weekday_spend['mean'] = weekday_spend['sum'] / n_days.reindex(weekday_order)
     weekday_spend.index = [weekday_it.get(d, d) for d in weekday_spend.index]
     weekday_spend = weekday_spend.dropna()
 
     if not weekday_spend.empty:
-        top_day = weekday_spend['sum'].idxmax()
+        top_day = weekday_spend['mean'].idxmax()
         top_day_avg = weekday_spend.loc[top_day, 'mean']
 
         fig_heatmap = px.bar(weekday_spend.reset_index(),
                              x='index', y='mean',
                              color='mean',
                              color_continuous_scale=['#C8E6C9', '#FFF9C4', '#FFCDD2'],
-                             labels={'index': 'Giorno', 'mean': 'Spesa Media (€)'},
-                             title='Spesa Media per Giorno della Settimana')
+                             labels={'index': 'Giorno', 'mean': 'Spesa media (€)'},
+                             title='Spesa media per giorno della settimana')
         fig_heatmap.update_layout(coloraxis_showscale=False, height=350)
         st.plotly_chart(fig_heatmap, use_container_width=True)
-        st.info(f"💡 Il tuo giorno più costoso è il **{top_day}** (media €{top_day_avg:,.2f} per transazione)")
+        st.info(f"💡 Il giorno in cui spendi di più è il **{top_day}**: in media €{top_day_avg:,.0f} ogni {top_day.lower()}.")
 
     st.divider()
 
     # ====== 8. TOP MERCHANTS ======
-    st.markdown("### 🏪 Top Spese Ricorrenti")
+    st.markdown("### 🏪 Dove spendi più spesso")
 
+    def _label(r):
+        d = str(r['description'] or '').strip()
+        if d and d.lower() not in ('nan', 'none'):
+            return d
+        t = [x for x in _tags_list(r['tags']) if str(x) != 'Recurring']
+        return f"#{t[0]}" if t else f"({r['category']})"
+    expenses['description'] = expenses.apply(_label, axis=1)
     merchant_stats = expenses.groupby('description').agg(
         totale=('abs_amount', 'sum'),
         conteggio=('abs_amount', 'count'),
@@ -760,14 +711,15 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     # Tip: Restaurant spending
     if total_expenses > 0:
         try:
-            cat_mask = expenses['category'].notna() & expenses['category'].str.lower().isin(['ristoranti', 'restaurants', 'cibo fuori', 'food'])
+            cat_mask = expenses['category'].notna() & expenses['category'].str.lower().isin(
+                ['ristoranti', 'restaurants', 'cibo fuori', 'food', 'mangiare e bere'])
             ristoranti = expenses[cat_mask]
             if not ristoranti.empty:
                 rist_pct = (ristoranti['abs_amount'].sum() / total_expenses) * 100
-                if rist_pct > 15:
+                if rist_pct > 8:
                     monthly_rist = ristoranti['abs_amount'].sum() / max(len(expenses['month_year'].unique()), 1)
                     potential_save = monthly_rist * 0.3
-                    tips.append(f"🍕 **Ristoranti = {rist_pct:.0f}% delle spese.** Cucinando a casa 2 volte in più a settimana potresti risparmiare ~€{potential_save:,.0f}/mese.")
+                    tips.append(f"🍕 **Mangiare fuori = {rist_pct:.0f}% delle spese.** Cucinando a casa 2 volte in più a settimana potresti risparmiare ~€{potential_save:,.0f}/mese.")
         except Exception:
             pass
 
@@ -778,11 +730,11 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
     # Tip: Savings rate
     if savings_rate is not None and total_income > 0:
         if savings_rate < 10:
-            tips.append("💸 **Savings rate sotto il 10%.** Prova la regola 50/30/20: 50% bisogni, 30% desideri, 20% risparmio.")
+            tips.append("💸 **Tasso di risparmio sotto il 10%.** Prova la regola 50/30/20: 50% necessità, 30% desideri, 20% risparmio.")
         elif savings_rate < 20:
             n_months_inc = max(len(income['date'].dt.to_period('M').unique()), 1) if not income.empty else 1
             extra_monthly = ((20 - savings_rate) / 100) * (total_income / n_months_inc)
-            tips.append(f"📊 **Savings rate al {savings_rate:.0f}%.** Per arrivare al 20%, basta risparmiare €{extra_monthly:,.0f} in più al mese.")
+            tips.append(f"📊 **Tasso di risparmio al {savings_rate:.0f}%.** Per arrivare al 20% servono €{extra_monthly:,.0f} in più al mese.")
 
     # Tip: Want spending
     if 'necessity' in expenses.columns:
@@ -791,7 +743,7 @@ def render_smart_insights(full_df, filtered_df, data_manager=None):
             want_pct = (wants['abs_amount'].sum() / total_expenses) * 100
             if want_pct > 35:
                 cut_20 = wants['abs_amount'].sum() * 0.20 / max(len(expenses['month_year'].unique()), 1)
-                tips.append(f"🛍️ **I 'Want' sono il {want_pct:.0f}% delle spese.** Tagliando il 20% delle spese non essenziali risparmi ~€{cut_20:,.0f}/mese.")
+                tips.append(f"🛍️ **I desideri sono il {want_pct:.0f}% delle spese.** Tagliandone il 20% risparmi ~€{cut_20:,.0f}/mese (vedi la busta desideri in Dashboard).")
 
     # Tip: Weekend spending
     if not weekday_spend.empty:
@@ -897,7 +849,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
     df = filtered_df.copy()
 
     if 'necessity' not in df.columns:
-        st.warning("Necessity data not found. Please re-import data to apply new rules.")
+        st.warning("Classificazione Necessità/Desiderio mancante: applica le regole da Impostazioni.")
         return
 
     df['date'] = pd.to_datetime(df['date'])
@@ -934,7 +886,7 @@ def render_needs_vs_wants(full_df, filtered_df=None):
     unclassified = total_exp - needs_total - wants_total
     if unclassified > 0.5:
         st.caption(f"⚠️ €{unclassified:,.2f} ({unclassified / total_exp * 100:.0f}%) senza classificazione Need/Want — "
-                   "impostabile in Settings → Necessity Rules.")
+                   "impostabile in Impostazioni → Necessità o desiderio.")
 
     # 50/30/20 Rule comparison
     st.markdown("### 🎯 Regola 50/30/20")
@@ -1043,36 +995,40 @@ def render_forecasting(df, full_df=None, data_manager=None):
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- Per-Category Forecast ---
-    st.markdown("### 📂 Previsione per Categoria")
-
-    exp_all = real_expenses(df)
+    # --- Per categoria: quanto spendi di solito e com'è andato questo mese ---
+    st.markdown("### 📂 Categorie: quanto spendi di solito")
     ref = full_df if full_df is not None else df
-    st.caption(f"Media degli ultimi {AVG_WINDOW_MONTHS} mesi completi, contando i mesi senza spese "
-               "(una categoria saltuaria come Viaggi non viene prevista come se ci fosse un viaggio ogni mese).")
-    cat_forecasts = []
-    for cat in exp_all['category'].dropna().unique():
-        s_cat = monthly_totals(exp_all[exp_all['category'] == cat], 'expense', ref_df=ref)
-        if len(s_cat) < 2:
-            continue
-        pred = float(s_cat.tail(AVG_WINDOW_MONTHS).mean())
-        prev = float(s_cat.iloc[-1])
-        if pred < 1 and prev < 1:
-            continue
-        delta = pred - prev
-        cat_forecasts.append({
-            'Categoria': cat,
-            'Ultimo Mese': f"€{prev:,.0f}",
-            'Previsione': f"€{pred:,.0f}",
-            '_delta': delta,
-            'Variazione': f"{'+' if delta >= 0 else ''}€{delta:,.0f}",
-            'Trend': '📈' if delta > 5 else ('📉' if delta < -5 else '➡️')
-        })
+    co = category_overview(df, ref_df=ref)
+    if co.empty:
+        st.info("Dati insufficienti per le categorie.")
+    else:
+        last_p = last_complete_period(ref)
+        cur_lbl = f"{MONTH_ABBR[ip.month]} finora" if ip is not None else None
+        st.caption(f"**Media/mese** = ultimi {int(co['n_mesi'].iloc[0])} mesi completi, mesi senza spese inclusi: "
+                   "è la cifra da mettere a budget. **Frequenza** dice se la categoria è fissa (12/12) "
+                   "o saltuaria (es. viaggi): per quelle saltuarie la media è un accantonamento, non una spesa "
+                   "che arriva ogni mese.")
 
-    if cat_forecasts:
-        cf_df = pd.DataFrame(cat_forecasts).sort_values('_delta', ascending=False)
-        st.dataframe(cf_df[['Categoria', 'Ultimo Mese', 'Previsione', 'Variazione', 'Trend']],
-                     use_container_width=True, hide_index=True)
+        def stato(r):
+            if ip is not None and r['mese_in_corso'] > r['media'] * 1.1 and r['media'] > 0:
+                return "🔴 questo mese già sopra la media"
+            if r['scarto_ultimo'] > max(r['media'] * 0.25, 50):
+                return f"🟠 {MONTH_ABBR[last_p.month]} sopra la media"
+            if r['scarto_ultimo'] < -max(r['media'] * 0.25, 50):
+                return f"🟢 {MONTH_ABBR[last_p.month]} sotto la media"
+            return "⚪ nella norma"
+
+        tbl = pd.DataFrame({
+            'Categoria': co['categoria'],
+            'Media/mese': co['media'].map(lambda v: f"€{v:,.0f}"),
+            'Frequenza': co.apply(lambda r: f"{r['mesi_con_spesa']}/{r['n_mesi']} mesi", axis=1),
+            f"{MONTH_ABBR[last_p.month].capitalize()} {last_p.year}": co['ultimo'].map(lambda v: f"€{v:,.0f}"),
+        })
+        if cur_lbl:
+            tbl[cur_lbl.capitalize()] = co['mese_in_corso'].map(lambda v: f"€{v:,.0f}")
+        tbl['Stato'] = co.apply(stato, axis=1)
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
+        st.caption(f"Totale medie: €{co['media'].sum():,.0f}/mese (= spesa media mensile).")
 
     # --- Scenario Fine Anno ---
     if full_df is not None:
@@ -1101,7 +1057,6 @@ def render_year_scenario(full_df, data_manager=None):
         st.info(f"Nessun dato disponibile per il {current_year}.")
         return
 
-    months_elapsed = max(len(ytd['date'].dt.to_period('M').unique()), 1)
     remaining_months = 12 - today.month  # mesi interi rimanenti dopo questo mese
 
     ytd_inc_df = real_income(ytd)
@@ -1112,26 +1067,20 @@ def render_year_scenario(full_df, data_manager=None):
     ytd_expenses_total = ytd_exp_df['abs'].sum()
 
     # Modello IBRIDO: gli impegni noti (ricorrenti/rate) si contano in modo ESATTO;
-    # le spese VARIABILI si stimano con la mediana dei mesi completi (robusta).
-    ip = in_progress_period(df)
+    # le spese VARIABILI con la media degli ultimi 12 mesi completi (stessa base di
+    # Salute e Previsioni); le entrate con l'entrata tipica (mediana 12 mesi).
     is_rec = (ytd_exp_df['source_file'] == 'Recurring') if 'source_file' in ytd_exp_df.columns \
         else pd.Series(False, index=ytd_exp_df.index)
+    all_exp = real_expenses(df)
+    var_exp = all_exp[all_exp['source_file'] != 'Recurring'] if 'source_file' in all_exp.columns else all_exp
 
-    def _typical(mask_series):
-        # solo spese VARIABILI (escluse le ricorrenti già pagate) e mesi completi
-        s = ytd_exp_df[mask_series & (~is_rec)].groupby('period')['abs'].sum()
-        if ip is not None and ip in s.index:
-            s = s.drop(ip)
-        return float(s.median()) if not s.empty else 0.0
+    def _typical(mask):
+        return avg_monthly(var_exp[mask], ref_df=df)
 
-    typ_need = _typical(ytd_exp_df['necessity'] == 'Need')
-    typ_want = _typical(ytd_exp_df['necessity'] == 'Want')
-    typ_other = _typical(~ytd_exp_df['necessity'].isin(['Need', 'Want']))
-
-    inc_series = ytd_inc_df.assign(period=ytd_inc_df['date'].dt.to_period('M')).groupby('period')['amount'].sum()
-    if ip is not None and ip in inc_series.index:
-        inc_series = inc_series.drop(ip)
-    typ_income = float(inc_series.median()) if not inc_series.empty else (ytd_income / months_elapsed)
+    typ_need = _typical(var_exp['necessity'] == 'Need')
+    typ_want = _typical(var_exp['necessity'] == 'Want')
+    typ_other = _typical(~var_exp['necessity'].isin(['Need', 'Want']))
+    typ_income = typical_income(df)
 
     # Mese in corso: conta solo quello che MANCA rispetto a un mese tipico (lo
     # stipendio arriva in un colpo solo: una frazione del mese lo conterebbe due volte)
@@ -1186,7 +1135,7 @@ def render_year_scenario(full_df, data_manager=None):
     fy_net_base = ytd_net + proj_income - proj_expenses
 
     st.caption(f"Modello ibrido: **impegni noti** (ricorrenti/rate) contati in modo esatto, "
-               f"**spese variabili** stimate con la mediana dei mesi completi del {current_year}. "
+               f"**spese variabili** = media degli ultimi 12 mesi completi, **entrate** = entrata tipica (mediana 12 mesi). "
                f"Proiezione: resto di {MONTH_ABBR[today.month]} (quanto manca a un mese tipico) + "
                f"{proj_months} mesi" + (f" + tredicesima €{future_t13:,.0f} dalle buste paga" if future_t13 else "") + ".")
 
@@ -1350,11 +1299,8 @@ def render_income_analysis(full_df, filtered_df):
         st.info("Nessuna entrata trovata.")
         return
 
-    monthly_inc_all = full_income.groupby(pd.Grouper(key='date', freq='ME'))['amount'].sum()
-    monthly_inc_complete = drop_in_progress(monthly_inc_all, full_df)
-    _base = monthly_inc_complete if not monthly_inc_complete.empty else monthly_inc_all
-    typical_monthly = _base.median()
-    mean_monthly = _base.mean()
+    typical_monthly = typical_income(full_df)
+    mean_monthly = avg_monthly(full_df, 'income')
 
     filtered_income = real_income(filtered_df)
     total_period = filtered_income['amount'].sum()
@@ -1363,11 +1309,11 @@ def render_income_analysis(full_df, filtered_df):
     extra_period = extra_inc_df['amount'].sum() if not extra_inc_df.empty else 0
 
     st.caption("Entrate reali (trasferimenti/saldo/aggiustamenti esclusi). "
-               "Entrata tipica = mediana dei mesi completi, robusta a tredicesima/bonus.")
+               "Entrata tipica = mediana degli ultimi 12 mesi completi, robusta a tredicesima/bonus.")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Entrata Mensile Tipica", f"€{typical_monthly:,.0f}",
-                help=f"Mediana dei mesi completi (media €{mean_monthly:,.0f}).")
+                help=f"Mediana ultimi 12 mesi completi (media €{mean_monthly:,.0f}).")
     col2.metric("Entrate Periodo", f"€{total_period:,.0f}",
                 help=f"Ordinarie €{ord_period:,.0f} · Straordinarie €{extra_period:,.0f}")
 
@@ -1384,7 +1330,7 @@ def render_income_analysis(full_df, filtered_df):
                    f"{extra_period/total_period*100:.0f}% del totale).")
 
     # Annual Growth Rate
-    st.markdown("### 📈 Growth & Trends")
+    st.markdown("### 📈 Crescita e andamento")
     annual_inc = full_income.groupby(full_income['date'].dt.year)['amount'].sum()
 
     selected_years = filtered_df['date'].dt.year.unique() if not filtered_df.empty else []
@@ -1539,9 +1485,12 @@ def render_yoy_comparison(full_df):
     b_options = [y for y in years if y != current_year] or [current_year]
     default_b_idx = b_options.index(current_year - 1) if (current_year - 1) in b_options else len(b_options) - 1
     prev_year = c_b.selectbox("Confronta con", b_options, index=default_b_idx, key='yoy_year_b')
+    # Se l'anno scelto è quello in corso, di default confronta lo STESSO periodo:
+    # un anno incompleto contro uno intero sembrerebbe sempre in calo.
     period_mode = c_mode.radio(
         "Periodo", ["Anno intero", "Fino a oggi (YTD)"],
-        horizontal=True, key='yoy_mode',
+        index=1 if current_year == today.year else 0,
+        horizontal=True, key=f'yoy_mode_{current_year == today.year}',
         help="YTD = dal 1° gennaio alla data odierna, applicato a entrambi gli anni."
     )
 
@@ -1566,6 +1515,9 @@ def render_yoy_comparison(full_df):
         st.info("Nessun dato per gli anni selezionati.")
         return
 
+    if period_mode == "Anno intero" and today.year in (current_year, prev_year):
+        st.warning(f"⚠️ Il {today.year} non è ancora finito: con «Anno intero» lo confronti con un anno completo. "
+                   "Per un confronto equo usa «Fino a oggi».")
     st.info(
         f"**{current_year}:** {current_start.strftime('%d/%m')} → {current_end.strftime('%d/%m/%Y')}  "
         f"|  **{prev_year}:** {prev_start.strftime('%d/%m')} → {prev_end.strftime('%d/%m/%Y')}"
@@ -1796,7 +1748,7 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
         c4.metric("Budget Mensile", f"€{budget:,.0f}",
                   delta=f"{over:+,.0f}€ ultimo mese", delta_color="inverse")
     else:
-        c4.metric("Budget Mensile", "—", help="Imposta un budget in Settings → Budget Mensile per Categoria.")
+        c4.metric("Budget Mensile", "—", help="Imposta un budget in Impostazioni → Budget Mensile per Categoria.")
 
     # Trend complessivo
     if len(monthly) >= 3:
@@ -1892,7 +1844,7 @@ def render_category_deepdive(full_df, filtered_df, data_manager):
     st.markdown("### 🎯 Storico Aderenza Budget (tutte le categorie)")
     budgeted = {k: float(v) for k, v in budgets.items() if v and float(v) > 0}
     if not budgeted:
-        st.info("Nessun budget impostato. Vai in **Settings → Budget Mensile per Categoria**.")
+        st.info("Nessun budget impostato. Vai in **Impostazioni → Budget Mensile per Categoria**.")
         return
 
     rows = []
@@ -2202,16 +2154,13 @@ def render_commitments_calendar(full_df, data_manager):
     exp['abs'] = exp['amount'].abs()
     exp['period'] = exp['date'].dt.to_period('M')
     inc = real_income(df).copy()
-    ip = in_progress_period(df)
 
     # Un solo numero onesto: la SPESA TIPICA mensile = mediana del totale speso nei
     # mesi completi (include già tutto: mutuo, condominio, bollette, spesa...).
     # Niente doppio conteggio.
     # Ultimi 12 mesi completi (stessa base delle altre medie), mesi a zero inclusi
-    tot_s = monthly_totals(df, 'expense').tail(AVG_WINDOW_MONTHS)
-    typ_spend = float(tot_s.median()) if not tot_s.empty else 0.0
-    inc_s = monthly_totals(df, 'income').tail(AVG_WINDOW_MONTHS)
-    typ_income = float(inc_s.median()) if not inc_s.empty else 0.0
+    typ_spend = avg_monthly(df)          # spesa media 12 mesi (come Salute e Previsioni)
+    typ_income = typical_income(df)      # entrata tipica (mediana 12 mesi)
     t13 = thirteenth_estimate(data_manager) if data_manager is not None else 0.0
     cur_p = pd.Period(today, freq='M')
     spent_now = float(exp[exp['period'] == cur_p]['abs'].sum())
@@ -2221,7 +2170,7 @@ def render_commitments_calendar(full_df, data_manager):
         st.info("Dati insufficienti per il calendario.")
         return
 
-    st.caption("Proiezione su un 'mese tipico': entrate e spese sono la **mediana** degli ultimi 12 mesi "
+    st.caption("Proiezione su un 'mese tipico': **spesa media** ed **entrata tipica** degli ultimi 12 mesi "
                "completi (la spesa include già tutto ciò che registri — mutuo, bollette, spesa...). "
                "Il mese in corso conta solo quanto manca a un mese tipico; a dicembre si aggiunge la "
                "tredicesima delle buste paga. Serve a vedere la traiettoria, non il singolo movimento.")

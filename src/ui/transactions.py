@@ -4,13 +4,13 @@ from src.data_manager import DataManager
 
 
 def render_transactions(data_manager: DataManager):
-    st.header("Transactions")
+    st.header("📒 Movimenti")
 
     try:
         df = data_manager.con.execute("SELECT * FROM transactions ORDER BY date DESC").df()
 
         if df.empty:
-            st.info("No data available.")
+            st.info("Nessun dato disponibile.")
             return
 
         df['date'] = pd.to_datetime(df['date'])
@@ -70,7 +70,7 @@ def render_transactions(data_manager: DataManager):
             (filtered_df['amount'].abs() <= amount_range[1])
         ]
 
-        st.caption(f"Showing {len(filtered_df):,} of {len(df):,} transactions")
+        st.caption(f"{len(filtered_df):,} movimenti su {len(df):,}")
 
         # ── Export ─────────────────────────────────────────────────────────────
         csv_bytes = filtered_df.drop(columns=['id'], errors='ignore').to_csv(index=False).encode('utf-8')
@@ -84,11 +84,11 @@ def render_transactions(data_manager: DataManager):
         st.divider()
 
         # ── Tabs: Edit | Bulk Actions ───────────────────────────────────────────
-        tab_edit, tab_bulk = st.tabs(["✏️ Edit Transactions", "⚡ Bulk Actions"])
+        tab_edit, tab_bulk = st.tabs(["✏️ Modifica movimenti", "⚡ Bulk Actions"])
 
         # ── Tab 1: Edit ────────────────────────────────────────────────────────
         with tab_edit:
-            st.info("💡 Double-click a cell to edit. Press **Save Changes** to persist.")
+            st.info("💡 Doppio clic su una cella per modificarla, poi **Salva modifiche**.")
 
             column_config = {
                 "id": None,
@@ -112,7 +112,7 @@ def render_transactions(data_manager: DataManager):
                 key="data_editor"
             )
 
-            if st.button("Save Changes", key="save_edit"):
+            if st.button("Salva modifiche", key="save_edit"):
                 original_ids = set(filtered_df['id'].dropna())
                 current_ids = set(edited_df['id'].dropna())
                 deleted_ids = original_ids - current_ids
@@ -175,14 +175,14 @@ def render_transactions(data_manager: DataManager):
                     st.toast(f"Updated {changes_count} rows")
 
                 if changes_count > 0 or not new_rows.empty or deleted_ids:
-                    st.success("Saved successfully!")
+                    st.success("Salvato!")
                     st.rerun()
                 else:
-                    st.info("No changes detected.")
+                    st.info("Nessuna modifica.")
 
         # ── Tab 2: Bulk Actions ────────────────────────────────────────────────
         with tab_bulk:
-            st.info("Select rows, then choose an action to apply to all selected transactions.")
+            st.info("Seleziona le righe, poi scegli l'azione da applicare a tutte.")
 
             display_cols = ['date', 'description', 'category', 'amount', 'account', 'tags']
             bulk_event = st.dataframe(
@@ -199,13 +199,13 @@ def render_transactions(data_manager: DataManager):
 
             if selected_indices:
                 selected_ids = filtered_df.iloc[selected_indices]['id'].tolist()
-                st.success(f"{len(selected_ids)} rows selected")
+                st.success(f"{len(selected_ids)} righe selezionate")
 
                 cats = data_manager.get_unique_categories()
                 all_tags_list = data_manager.get_unique_tags()
 
                 with st.form("bulk_action_form"):
-                    st.markdown("**Apply to selected rows:**")
+                    st.markdown("**Applica alle righe selezionate:**")
                     bc1, bc2, bc3 = st.columns(3)
                     bulk_cat = bc1.selectbox("Set Category", ["(keep)"] + cats)
                     bulk_necessity = bc2.selectbox("Set Necessity", ["(keep)", "Need", "Want"])
@@ -214,12 +214,12 @@ def render_transactions(data_manager: DataManager):
                     bd1, bd2 = st.columns([1, 3])
                     do_delete = bd1.checkbox("Delete selected rows", value=False)
 
-                    submitted = st.form_submit_button("Apply", type="primary")
+                    submitted = st.form_submit_button("Applica", type="primary")
                     if submitted:
                         if do_delete:
                             placeholders = ','.join(['?'] * len(selected_ids))
                             data_manager.con.execute(f"DELETE FROM transactions WHERE id IN ({placeholders})", selected_ids)
-                            st.success(f"Deleted {len(selected_ids)} rows")
+                            st.success(f"Eliminate {len(selected_ids)} righe")
                             st.rerun()
                         else:
                             updated = 0
@@ -246,14 +246,14 @@ def render_transactions(data_manager: DataManager):
                                 )
                                 updated += 1
                             if updated > 0:
-                                st.success(f"Updated {len(selected_ids)} rows")
+                                st.success(f"Aggiornate {len(selected_ids)} righe")
                                 st.rerun()
                             else:
-                                st.info("No action selected.")
+                                st.info("Nessuna azione scelta.")
             else:
-                st.caption("No rows selected. Click rows in the table above to select them.")
+                st.caption("Nessuna riga selezionata: clicca le righe nella tabella sopra.")
 
     except Exception as e:
-        st.error(f"Error loading transactions: {e}")
+        st.error(f"Errore nel caricamento dei movimenti: {e}")
         import traceback
         st.text(traceback.format_exc())

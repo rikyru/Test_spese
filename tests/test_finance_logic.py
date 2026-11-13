@@ -309,3 +309,21 @@ def test_thirteenth_estimate(dm):
     assert thirteenth_estimate(dm) == 0.0
     dm.save_payslip({'year': 2025, 'month': 12, 'kind': 'tredicesima', 'netto': 2113.0}, 'x.pdf')
     assert thirteenth_estimate(dm) == 2113.0
+
+
+from src.ui.analysis import typical_income, category_overview
+
+
+def test_typical_income_is_median_of_12_complete_months():
+    rows = [(f'2020-{m:02d}-27', 2000.0, 'Stipendio', 'Income', []) for m in range(1, 13)]
+    rows.append(('2020-12-20', 2000.0, 'Stipendio', 'Income', []))      # tredicesima
+    assert typical_income(_tx(rows)) == 2000.0
+
+
+def test_category_overview_counts_zero_months():
+    rows = [('2020-01-10', -1200.0, 'Viaggi', 'Expense', [])]
+    rows += [(f'2020-{m:02d}-05', -100.0, 'Spesa', 'Expense', []) for m in range(1, 13)]
+    co = category_overview(_tx(rows)).set_index('categoria')
+    assert co.loc['Viaggi', 'media'] == pytest.approx(100.0)       # 1200 / 12 mesi
+    assert co.loc['Viaggi', 'mesi_con_spesa'] == 1
+    assert co.loc['Spesa', 'mesi_con_spesa'] == 12 and co.loc['Spesa', 'ultimo'] == 100.0

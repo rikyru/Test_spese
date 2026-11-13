@@ -9,7 +9,7 @@ _FREQ_PER_MONTH = {'Monthly': 1.0, 'Bimonthly': 0.5, 'Quarterly': 1 / 3,
 
 
 def render_recurring(data_manager: DataManager):
-    st.title("🔁 Recurring Expenses (Spese Fisse)")
+    st.title("🔁 Spese ricorrenti")
 
     # --- Action Section ---
     col_act_1, col_act_2 = st.columns([3, 1])
@@ -24,8 +24,8 @@ def render_recurring(data_manager: DataManager):
                     st.success(f"Generated {count} transactions!")
                     st.toast(f"Generated {count} transactions!", icon="✅")
                 else:
-                    st.info("No expenses due today.")
-                    st.toast("No expenses due today.", icon="ℹ️")
+                    st.info("Nessuna spesa in scadenza oggi.")
+                    st.toast("Nessuna spesa in scadenza oggi.", icon="ℹ️")
 
     # --- OVERVIEW d'impatto ---
     _rec = data_manager.get_recurring()
@@ -94,7 +94,7 @@ def render_recurring(data_manager: DataManager):
     # --- Upcoming Projections Section ---
     from datetime import date, timedelta
     
-    st.subheader("📅 Upcoming in next 30 days")
+    st.subheader("📅 In arrivo nei prossimi 30 giorni")
     
     # Get projections for next 30 days
     today = date.today()
@@ -110,7 +110,7 @@ def render_recurring(data_manager: DataManager):
         
         # Summary metrics
         total_p = proj_idx[proj_idx['amount'] < 0]['amount'].sum()
-        st.caption(f"Total scheduled expenses: **€{total_p:,.2f}**")
+        st.caption(f"Totale in programma: **€{total_p:,.2f}**")
         
         # Cards
         for i, row in proj_idx.iterrows():
@@ -145,7 +145,7 @@ def render_recurring(data_manager: DataManager):
                 """, unsafe_allow_html=True)
                 
     else:
-        st.info("No recurring expenses scheduled for the next 30 days.")
+        st.info("Nessuna spesa ricorrente nei prossimi 30 giorni.")
         
     st.divider()
 
@@ -211,24 +211,24 @@ def render_recurring(data_manager: DataManager):
         st.divider()
 
     # --- Add New Recurring ---
-    st.subheader("➕ Add New Template")
+    st.subheader("➕ Nuova spesa ricorrente")
     
-    with st.expander("Create New Recurring Expense", expanded=True):
+    with st.expander("Crea spesa ricorrente", expanded=True):
         with st.form("add_rec_form"):
             col1, col2 = st.columns(2)
             
             with col1:
-                r_name = st.text_input("Template Name", placeholder="e.g. Netflix Subscription")
-                r_amount = st.number_input("Amount (Negative for Expense)", value=-10.0, step=1.0, help="Use negative values for expenses, positive for income.")
-                r_cat = st.selectbox("Category", data_manager.get_unique_categories() + ["Other"])
+                r_name = st.text_input("Nome", placeholder="e.g. Netflix Subscription")
+                r_amount = st.number_input("Importo (negativo per le spese)", value=-10.0, step=1.0, help="Use negative values for expenses, positive for income.")
+                r_cat = st.selectbox("Categoria", data_manager.get_unique_categories() + ["Other"])
                 if r_cat == "Other":
-                   r_cat_custom = st.text_input("New Category Name")
+                   r_cat_custom = st.text_input("Nome nuova categoria")
                    r_cat = r_cat_custom if r_cat_custom else "General"
                    
             with col2:
-                r_acc = st.selectbox("Account/Wallet", data_manager.get_unique_accounts())
-                r_freq = st.selectbox("Frequency", ["Monthly", "Bimonthly", "Quarterly", "Yearly", "Weekly"])
-                r_date = st.date_input("Next Due Date")
+                r_acc = st.selectbox("Conto", data_manager.get_unique_accounts())
+                r_freq = st.selectbox("Frequenza", ["Monthly", "Bimonthly", "Quarterly", "Yearly", "Weekly"])
+                r_date = st.date_input("Prossima scadenza")
 
 
 
@@ -253,8 +253,8 @@ def render_recurring(data_manager: DataManager):
             else:
                 r_end_date = r_end_date_in
 
-            st.markdown("#### Details")
-            r_desc = st.text_input("Description for Transaction", placeholder="e.g. Monthly subscription payment")
+            st.markdown("#### Dettagli")
+            r_desc = st.text_input("Descrizione del movimento", placeholder="e.g. Monthly subscription payment")
             
             # Tags: un solo campo che accetta sia tag esistenti sia NUOVI (scrivi e Invio)
             existing_tags = data_manager.get_unique_tags()
@@ -264,11 +264,11 @@ def render_recurring(data_manager: DataManager):
                 help="Per un tag nuovo: scrivilo e premi Invio (poi Salva).",
             )
 
-            submitted = st.form_submit_button("Save Template")
+            submitted = st.form_submit_button("Salva")
 
             if submitted:
                 if not r_name:
-                    st.error("Name is required.")
+                    st.error("Il nome è obbligatorio.")
                 else:
                     # Normalizza i tag (minuscolo, senza #), esistenti + nuovi
                     final_tags = []
@@ -284,13 +284,13 @@ def render_recurring(data_manager: DataManager):
                     final_desc = r_desc if r_desc else r_name
                     
                     data_manager.add_recurring(r_name, r_amount, r_cat, r_acc, r_freq, r_date, final_desc, final_tags, r_installments, r_end_date, r_installments_total)
-                    st.success(f"Recurring expense '{r_name}' added!")
+                    st.success(f"Spesa ricorrente '{r_name}' aggiunta!")
                     st.rerun()
 
     st.divider()
 
     # --- List Existing ---
-    st.subheader("📋 Active Templates")
+    st.subheader("📋 Spese ricorrenti attive")
 
     rec_df = data_manager.get_recurring()
 
@@ -322,7 +322,7 @@ def render_recurring(data_manager: DataManager):
             key="rec_editor"
         )
         
-        if st.button("💾 Save Changes", type="primary"):
+        if st.button("💾 Salva modifiche", type="primary"):
             # Detect Changes
             # Similar logic to transactions: Diff or Update All
             # Since number of recurring expenses is small, we can just update those that changed or are new.
@@ -401,10 +401,10 @@ def render_recurring(data_manager: DataManager):
                         changes_count += 1
             
             if changes_count > 0:
-                st.success(f"Saved {changes_count} changes!")
+                st.success(f"Salvate {changes_count} modifiche!")
                 st.rerun()
             else:
-                st.info("No changes detected.")
+                st.info("Nessuna modifica.")
 
     else:
-        st.info("No recurring expenses set up yet.")
+        st.info("Nessuna spesa ricorrente impostata.")

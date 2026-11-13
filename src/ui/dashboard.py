@@ -23,7 +23,7 @@ def render_dashboard(data_manager):
     try:
         df = data_manager.get_transactions()
         if df.empty:
-            st.info("No data available. Please import a ZIP file.")
+            st.info("Nessun dato: importa un file dalla pagina Importa.")
             return
 
         # Ensure date is datetime
@@ -75,31 +75,57 @@ def render_dashboard(data_manager):
         if account_filter:
             filtered_df = filtered_df[filtered_df['account'].isin(account_filter)]
 
-        # --- Riepilogo del mese + Calendario (solo modalità Mese) ---
-        if filter_mode == "Month" and selected_year and selected_month:
-            m_exp_df = real_expenses(filtered_df)
-            m_inc_df = real_income(filtered_df)
-            m_exp = m_exp_df['amount'].abs().sum()
-            m_inc = m_inc_df['amount'].sum()
-            m_net = m_inc - m_exp
-            m_rate = (m_net / m_inc * 100) if m_inc > 0 else 0
-
+        # --- Riepilogo del periodo (unica riga di KPI; confronto solo in vista Mese) ---
+        is_month = filter_mode == "Month" and selected_year and selected_month
+        m_exp_df = real_expenses(filtered_df)
+        m_inc_df = real_income(filtered_df)
+        m_exp = m_exp_df['amount'].abs().sum()
+        m_inc = m_inc_df['amount'].sum()
+        m_net = m_inc - m_exp
+        m_rate = (m_net / m_inc * 100) if m_inc > 0 else 0
+        d_exp = d_inc = d_net = None
+        if is_month:
             # Mese precedente confrontabile (stessi giorni se il mese è in corso)
             p_df, p_lbl = comparable_prev_month(df, selected_year, selected_month)
             if account_filter:
                 p_df = p_df[p_df['account'].isin(account_filter)]
             p_exp = real_expenses(p_df)['amount'].abs().sum()
-            delta_exp = m_exp - p_exp
+            p_inc = real_income(p_df)['amount'].sum()
+            if p_exp > 0:
+                d_exp = f"{m_exp - p_exp:+,.0f}€ {p_lbl}"
+            if p_inc > 0:
+                d_inc = f"{m_inc - p_inc:+,.0f}€ {p_lbl}"
+            if p_exp > 0 or p_inc > 0:
+                d_net = f"{m_net - (p_inc - p_exp):+,.0f}€ {p_lbl}"
+            period_lbl = f"{month_names[selected_month]} {selected_year}"
+        elif filter_mode == "Year":
+            period_lbl = str(selected_year)
+        elif filter_mode == "Custom":
+            period_lbl = f"{start_date.strftime('%d/%m/%Y')} – {end_date.strftime('%d/%m/%Y')}"
+        else:
+            period_lbl = "tutto lo storico"
 
-            month_lbl = f"{month_names[selected_month]} {selected_year}"
-            st.subheader(f"📋 Riepilogo {month_lbl}")
-            r1, r2, r3, r4 = st.columns(4)
-            r1.metric("Speso", f"€{m_exp:,.0f}",
-                      delta=(f"{delta_exp:+,.0f}€ {p_lbl}" if p_exp > 0 else None),
-                      delta_color="inverse")
-            r2.metric("Entrate", f"€{m_inc:,.0f}")
-            r3.metric("Risparmio", f"€{m_net:,.0f}")
-            r4.metric("Tasso Risparmio", f"{m_rate:.0f}%")
+        st.subheader(f"📋 Riepilogo {period_lbl}")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Speso", f"€{m_exp:,.0f}", delta=d_exp, delta_color="inverse")
+        r2.metric("Entrate", f"€{m_inc:,.0f}", delta=d_inc)
+        r3.metric("Risparmio", f"€{m_net:,.0f}", delta=d_net)
+        r4.metric("Tasso di risparmio", f"{m_rate:.0f}%")
+        st.caption("Entrate e spese reali: trasferimenti tra conti, saldo iniziale e aggiustamenti esclusi.")
+
+        if is_month:
+            # Impegni fissi ancora da pagare entro fine mese (ricorrenti/rate)
+            last_d = calendar.monthrange(selected_year, selected_month)[1]
+            try:
+                pend = data_manager.get_projected_recurring(datetime.date(selected_year, selected_month, last_d))
+                pend = pend[(pd.to_datetime(pend['date']).dt.date > today) & (pend['amount'] < 0)] \
+                    if not pend.empty else pend
+                if not pend.empty:
+                    st.caption(f"🔒 Ancora da pagare entro fine mese (ricorrenti/rate): "
+                               f"**€{pend['amount'].abs().sum():,.0f}** — "
+                               + ", ".join(f"{r['name']} €{abs(r['amount']):,.0f}" for _, r in pend.head(6).iterrows()))
+            except Exception:
+                pass
 
             # Riga narrativa: categoria top, spesa più grande, stato budget
             bits = []
@@ -160,7 +186,7 @@ def render_dashboard(data_manager):
 
         # --- 0. Liquidity Overview (New) ---
         st.divider()
-        st.subheader("💳 Wallet & Liquidity")
+        st.subheader("💳 Conti e liquidità")
         
         # We must operate on the FULL dataset for liquidity (cumulative balance)
         full_df = df # df is already full get_transactions() result
@@ -198,7 +224,7 @@ def render_dashboard(data_manager):
 
             # --- Wallet Grid ---
             if not balances.empty:
-                st.write("##### Active Wallets")
+                st.write("##### Conti")
 
                 # Main wallet first, then by balance descending
                 balances['_is_main'] = balances['account'] == main_wallet
@@ -276,196 +302,39 @@ def render_dashboard(data_manager):
                             st.warning(f"Mancano **€{manca:,.0f}**. Col risparmio mensile attuale (≤ 0) l'obiettivo "
                                        "non avanza: la priorità è chiudere i mesi in positivo.")
 
-        # --- Metrics ---
-        st.divider()
-        # Entrate/spese REALI (senza trasferimenti, saldo iniziale, aggiustamenti)
-        total_income = real_income(filtered_df)['amount'].sum()
-        total_expense = real_expenses(filtered_df)['amount'].sum()
-        balance = total_income + total_expense
-        savings_rate = (balance / total_income * 100) if total_income > 0 else 0
+        # --- Grafici (entrate/spese REALI: niente trasferimenti tra conti) ---
+        income_df = real_income(filtered_df)
+        expense_df = real_expenses(filtered_df).copy()
+        expense_df['abs_amount'] = expense_df['amount'].abs()
 
-        # Projections (If Month Mode)
-        projected_msg = ""
-        projected_balance = balance
-        
-        if filter_mode == "Month":
-            from datetime import date
-            # Calculate end of selected month
-            last_day = calendar.monthrange(selected_year, selected_month)[1]
-            end_of_period = date(selected_year, selected_month, last_day)
-            
-            # Get projections up to end of month
-            proj_df = data_manager.get_projected_recurring(end_of_period)
-            
-            if not proj_df.empty:
-                # Sum expenses (negative amounts)
-                # Ensure we only count those strictly AFTER current max date in data might be safer,
-                # but get_projected_recurring uses next_date which is naturally future.
-                # Just filter strictly within the month just in case next_date jumps out?
-                # The method returns until end_date so it's fine.
-                
-                proj_expenses = proj_df[proj_df['amount'] < 0]['amount'].sum()
-                if proj_expenses < 0:
-                     projected_balance += proj_expenses
-                     projected_msg = f"📉 Includes €{abs(proj_expenses):.2f} pending recurring"
-
-        # --- Recurring Expenses Impact ---
-        # Get monthly recurring total
-        rec_df = data_manager.get_recurring()
-        total_recurring_monthly = 0.0
-        
-        if not rec_df.empty:
-            # Normalize to monthly amount
-            def to_monthly(row):
-                amt = row['amount']
-                freq = row['frequency'] 
-                if freq == 'Monthly': return amt
-                if freq == 'Yearly': return amt / 12
-                if freq == 'Weekly': return amt * 4.33
-                return amt
-            
-            total_recurring_monthly = rec_df.apply(to_monthly, axis=1).sum()
-            
-        # Disposable Income (Assuming average monthly income or current month income)
-        # For meaningful "Budget", we should use the Income of the selected period if it's a month, 
-        # or an average. Let's use the current selected period's income.
-        
-        disposable_income = total_income + total_recurring_monthly # recurring is negative usually
-        # Wait, total_income includes everything? No, total_income is just Income.
-        # "Disposable" usually means "Income - Fixed Expenses".
-        # So: Real Disposable = Income - abs(Fixed Expenses)
-        # But Fixed Expenses might already be in "total_expense" if they happened?
-        # Yes, but we want to show "Committed" vs "Free".
-        
-        # Metric: "Monthly Fixed Commitment"
-        
-        # MoM delta (only in Month mode)
-        delta_income = None
-        delta_expense = None
-        delta_balance = None
-        if filter_mode == "Month" and selected_year is not None and selected_month is not None:
-            prev_df, p_lbl = comparable_prev_month(df, selected_year, selected_month)
-            if account_filter:
-                prev_df = prev_df[prev_df['account'].isin(account_filter)]
-            prev_income = real_income(prev_df)['amount'].sum()
-            prev_expense = real_expenses(prev_df)['amount'].sum()
-            prev_balance = prev_income + prev_expense
-            if prev_income != 0:
-                diff_inc = total_income - prev_income
-                sign = '+' if diff_inc >= 0 else '-'
-                delta_income = f"{sign}€{abs(diff_inc):,.2f} {p_lbl}"
-            if prev_expense != 0:
-                # Use absolute values: positive = spent more (bad), negative = spent less (good)
-                diff_exp = abs(total_expense) - abs(prev_expense)
-                sign = '+' if diff_exp >= 0 else '-'
-                delta_expense = f"{sign}€{abs(diff_exp):,.2f} {p_lbl}"
-            if prev_balance != 0:
-                diff_bal = balance - prev_balance
-                sign = '+' if diff_bal >= 0 else '-'
-                delta_balance = f"{sign}€{abs(diff_bal):,.2f} {p_lbl}"
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Income", f"€{total_income:,.2f}", delta=delta_income)
-        col2.metric("Expenses", f"€{total_expense:,.2f}", delta=delta_expense, delta_color="inverse")
-        col3.metric("Net Balance", f"€{balance:,.2f}", delta=delta_balance, help="Current Actual Balance")
-        
-        # New Metric: Disposable / Free
-        # If we are in a specific month, we can project.
-        # Let's show "Recurring Commitment"
-        col4.metric("Est. Recurring/Mo", f"€{total_recurring_monthly:,.2f}", help="Estimated monthly fixed expenses based on active recurring templates.")
-        
-        if filter_mode == "Month":
-             # Show progress bar for budget?
-             # "Free to Spend"
-             # Est. Income (take current) + Est. Recurring (negative)
-             # Remaining = Income - abs(Recurring) - abs(Variable Expenses)
-             # But Variable Expenses = Total Expenses - (Expenses that matched Recurring)
-             # Hard to separate exactly without linking transaction to recurring rule.
-             # Simplified:
-             # Free Cash Flow = Income - abs(Recurring)
-             free_cash = total_income + total_recurring_monthly
-             
-             # --- Budget / Safe to Spend Logic ---
-             
-             # Calculate Pending Recurring for this month
-             # We already have `projected_msg` logic earlier, let's reuse/refine.
-             from datetime import date
-             last_day = calendar.monthrange(selected_year, selected_month)[1]
-             end_of_period = date(selected_year, selected_month, last_day)
-             
-             # Get projections up to end of month
-             # Note: get_projected_recurring returns negative amounts for expenses
-             proj_df = data_manager.get_projected_recurring(end_of_period)
-             pending_recurring = 0.0
-             if not proj_df.empty:
-                 pending_recurring = proj_df[proj_df['amount'] < 0]['amount'].sum()
-             
-             # "Safe/Free to Spend" = Current Balance - abs(Pending Recurring)
-             # Because Balance includes everything paid so far.
-             # Pending are things we MUST pay.
-             safe_to_spend = balance + pending_recurring # pending is negative
-             
-             # Visual Card
-             st.markdown("### 💡 Monthly Budget Insight")
-             
-             # Create a 3-column visuals
-             b_col1, b_col2, b_col3 = st.columns(3)
-             
-             with b_col1:
-                 st.metric("Current Balance", f"€{balance:,.2f}", help="Income - Expenses So Far")
-                 
-             with b_col2:
-                 st.metric("🔒 Upcoming Fixed", f"€{abs(pending_recurring):,.2f}", help="Recurring expenses due before end of month")
-                 
-             with b_col3:
-                 # Color logic
-                 safe_color = "normal"
-                 if safe_to_spend < 0: safe_color = "inverse"
-                 st.metric("💸 Safe to Spend", f"€{safe_to_spend:,.2f}", delta=f"{safe_to_spend:,.2f}", delta_color=safe_color, help="Balance - Upcoming Fixed. This is what you can spend on variable costs.")
-             
-             # Progress Bar for Fixed Costs Coverage?
-             # Total Recurring for month
-             total_fixed_est = abs(total_recurring_monthly)
-             # How much fixed paid? Hard to know exactly without matching.
-             # But we can show: Income vs (Fixed + Variable)
-             
-             st.caption(f"Estimated Total Fixed Costs for Month: €{total_fixed_est:,.2f}")
-
-        # --- Visualizations ---
-        
-        # 1. Income vs Expense Breakdown
         col_charts_1, col_charts_2 = st.columns(2)
-        
+
         with col_charts_1:
-            st.subheader("Income Sources")
-            income_df = filtered_df[filtered_df['type'] == 'Income']
+            st.subheader("Entrate per categoria")
             if not income_df.empty:
                 income_by_cat = income_df.groupby('category')['amount'].sum().reset_index()
                 fig_inc = px.pie(income_by_cat, values='amount', names='category', hole=0.4)
                 inc_event = st.plotly_chart(fig_inc, use_container_width=True, on_select="rerun", key="pie_income")
-                # Drill-down
                 if inc_event and inc_event.selection and inc_event.selection.points:
                     sel_cat = inc_event.selection.points[0].get('label')
                     if sel_cat:
-                        st.markdown(f"**Transactions — {sel_cat}**")
-                        drill = income_df[income_df['category'] == sel_cat][['date','description','amount','tags']].sort_values('date', ascending=False)
+                        st.markdown(f"**Movimenti — {sel_cat}**")
+                        drill = income_df[income_df['category'] == sel_cat][['date', 'description', 'amount', 'tags']] \
+                            .sort_values('date', ascending=False)
                         st.dataframe(drill, use_container_width=True, hide_index=True)
             else:
-                st.info("No income data for this period.")
+                st.info("Nessuna entrata nel periodo.")
 
         with col_charts_2:
-            st.subheader("Spese per Categoria")
-            expense_df = filtered_df[filtered_df['type'] == 'Expense']
+            st.subheader("Spese per categoria")
             if not expense_df.empty:
-                expense_df = expense_df.copy()
-                expense_df['abs_amount'] = expense_df['amount'].abs()
                 exp_total = expense_df['abs_amount'].sum()
-                exp_by_cat = expense_df.groupby('category')['abs_amount'].sum().reset_index().sort_values('abs_amount', ascending=False)
+                exp_by_cat = expense_df.groupby('category')['abs_amount'].sum().reset_index() \
+                    .sort_values('abs_amount', ascending=False)
                 fig_exp = px.pie(exp_by_cat, values='abs_amount', names='category', hole=0.4)
                 exp_event = st.plotly_chart(fig_exp, use_container_width=True, on_select="rerun", key="pie_expense")
                 st.caption("👆 Clicca una categoria (torta o tabella) per il dettaglio per tag.")
 
-                # Tabella categorie (importo + %) — sempre visibile
                 cat_show = exp_by_cat.copy()
                 cat_show['%'] = (cat_show['abs_amount'] / exp_total * 100).apply(lambda x: f"{x:.1f}%")
                 cat_show['Importo'] = exp_by_cat['abs_amount'].apply(lambda x: f"€{x:,.2f}")
@@ -476,7 +345,6 @@ def render_dashboard(data_manager):
                     column_config={"category": "Categoria"}
                 )
 
-                # Categoria selezionata: dalla torta o dalla riga della tabella
                 sel_cat = None
                 if exp_event and exp_event.selection and exp_event.selection.points:
                     sel_cat = exp_event.selection.points[0].get('label')
@@ -486,19 +354,18 @@ def render_dashboard(data_manager):
                 if sel_cat:
                     cat_data = expense_df[expense_df['category'] == sel_cat]
                     cat_total = cat_data['abs_amount'].sum()
-                    st.markdown(f"#### 📂 {sel_cat} — €{cat_total:,.2f} ({cat_total/exp_total*100:.0f}% del mese)")
+                    st.markdown(f"#### 📂 {sel_cat} — €{cat_total:,.2f} ({cat_total/exp_total*100:.0f}% del periodo)")
 
-                    # Sotto-ripartizione per tag (sottocategorie)
                     tag_expl = cat_data.explode('tags')
                     tag_expl['tags'] = tag_expl['tags'].astype(str)
-                    tag_expl = tag_expl[~tag_expl['tags'].isin(['nan', 'None', ''])]
+                    tag_expl = tag_expl[~tag_expl['tags'].isin(['nan', 'None', '', 'Recurring'])]
                     if not tag_expl.empty:
-                        tag_break = tag_expl.groupby('tags')['abs_amount'].sum().reset_index().sort_values('abs_amount', ascending=False)
+                        tag_break = tag_expl.groupby('tags')['abs_amount'].sum().reset_index() \
+                            .sort_values('abs_amount', ascending=False)
                         tag_break['%'] = tag_break['abs_amount'] / cat_total * 100
                         th = tag_break.head(12).copy()
                         th['lbl'] = th['%'].apply(lambda x: f"{x:.0f}%")
-                        fig_tb = px.bar(th, x='tags', y='abs_amount', text='lbl',
-                                        title=f"Per tag — {sel_cat}")
+                        fig_tb = px.bar(th, x='tags', y='abs_amount', text='lbl', title=f"Per tag — {sel_cat}")
                         fig_tb.update_layout(height=280, showlegend=False, xaxis_title='', yaxis_title='€')
                         st.plotly_chart(fig_tb, use_container_width=True)
 
@@ -511,223 +378,108 @@ def render_dashboard(data_manager):
                         def _has_tags(t):
                             if hasattr(t, 'tolist'):
                                 t = t.tolist()
-                            return isinstance(t, list) and any(x and str(x) not in ('nan', 'None') for x in t)
+                            return isinstance(t, list) and any(x and str(x) not in ('nan', 'None', 'Recurring') for x in t)
                         untag = cat_data[~cat_data['tags'].apply(_has_tags)]['abs_amount'].sum()
                         if untag > 0:
                             st.caption(f"Senza tag: €{untag:,.2f} ({untag/cat_total*100:.0f}%)")
                     else:
                         st.caption("Nessun tag in questa categoria.")
 
-                    st.markdown("**Transazioni**")
+                    st.markdown("**Movimenti**")
                     drill = cat_data[['date', 'description', 'amount', 'tags']].sort_values('date', ascending=False)
                     st.dataframe(drill, use_container_width=True, hide_index=True)
             else:
-                st.info("No expense data for this period.")
+                st.info("Nessuna spesa nel periodo.")
 
-        # (Confronto Anno vs Anno spostato nella pagina 📊 Analysis → Anno vs Anno)
+        # --- Andamento: entrate, spese e netto (giornaliero nel mese, mensile altrimenti) ---
+        def _flows(src, key):
+            inc = real_income(src).groupby(key)['amount'].sum()
+            exp = real_expenses(src).groupby(key)['amount'].sum().abs()
+            out = pd.DataFrame({'Entrate': inc, 'Spese': exp}).fillna(0.0).sort_index()
+            out['Netto'] = out['Entrate'] - out['Spese']
+            return out
 
-        # 3. Monthly Balance Trend (Combo Chart)
-        st.subheader("Monthly Balance Trend")
-        
-        # Prepare data for all time (or filtered range if user wants, but Trend is usually best over time)
-        # Using filtered_df if "Month" filter is NOT active makes sense.
-        # If "Month" is active, maybe show Daily trend? 
-        # User requested "Monthly balance", so let's stick to Monthly aggregation of the full or filtered dataset.
-        
-        trend_source = df if filter_mode == "Month" else filtered_df # If in Month view, show everything for context? Or logic:
-        # If User selected "Year 2024", show months of 2024.
-        # If User selected "All Time", show all months.
-        # If User selected "Month", show daily??? No, user asked for "Month by Month".
-        # So if they are in "Month" view, this chart might be static single point?
-        # Let's use the 'df' (full data) filtered by the selected Year if in Year mode, or just full df for context.
-        # Actually standard behavior: Dashboard charts usually reflect filters. But "Trend" implies time series.
-        # If in "Month" view, let's show Daily trend for that month instead?
-        # User asked: "grafico del saldo mese per mese che ora manca". This implies a Year/AllTime view.
-        
-        chart_data = filtered_df.copy()
-        if filter_mode == "Month":
-             # In Month mode, showing "Month by Month" is one bar. 
-             # Let's switch to show the whole Year of the selected month to give context?
-             # Or show Daily for that month.
-             # Implem: If Month mode, show Daily. If Year/AllTime, show Monthly.
-             pass
-        
-        # We'll implement Monthly View for Year/AllTime, and Daily for Month mode.
-        
-        if filter_mode == "Month":
-            # Daily Trend
-            st.caption("Daily Trend for selected month")
-            try:
-                # Use pivot_table for safety
-                daily_df = filtered_df.copy()
-                daily_df['day_date'] = daily_df['date'].dt.date
-                
-                if not daily_df.empty:
-                    grp = daily_df.pivot_table(index='day_date', columns='type', values='amount', aggfunc='sum', fill_value=0)
-                    
-                    if 'Income' not in grp.columns: grp['Income'] = 0.0
-                    if 'Expense' not in grp.columns: grp['Expense'] = 0.0
-                    
-                    grp['Balance'] = grp['Income'] + grp['Expense']
-                    grp['Cumulative'] = grp['Balance'].cumsum()
-                    
-                    daily_stats = grp.reset_index()
-                    # daily_stats has 'day_date' as column now
-                    
-                    if not daily_stats.empty:
-                        fig_daily = go.Figure()
-                        
-                        fig_daily.add_trace(go.Bar(x=daily_stats['day_date'], y=daily_stats['Income'], name='Daily Income', marker_color='#4CAF50', opacity=0.6))
-                        fig_daily.add_trace(go.Bar(x=daily_stats['day_date'], y=daily_stats['Expense'], name='Daily Expenses', marker_color='#EF5350', opacity=0.6))
-                        
-                        fig_daily.add_trace(go.Scatter(x=daily_stats['day_date'], y=daily_stats['Cumulative'], name='Month Cashflow', mode='lines+markers', line=dict(color='#2196F3', width=3)))
-                        
-                        fig_daily.update_layout(
-                            title="Daily Cashflow & Trend",
-                            barmode='overlay',
-                            xaxis_title="Date",
-                            yaxis_title="Amount (€)",
-                            hovermode="x unified",
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                        )
-                        st.plotly_chart(fig_daily, use_container_width=True)
-                    else:
-                        st.info("No data for daily trend.")
-                else:
-                    st.info("No data for daily trend.")
-            except Exception as e:
-                st.error(f"Error showing daily trend: {e}")
+        def _flow_chart(fl, title, cumulative=False):
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=fl.index, y=fl['Entrate'], name='Entrate', marker_color='#4CAF50', opacity=0.7))
+            fig.add_trace(go.Bar(x=fl.index, y=-fl['Spese'], name='Spese', marker_color='#EF5350', opacity=0.7))
+            line = fl['Netto'].cumsum() if cumulative else fl['Netto']
+            fig.add_trace(go.Scatter(x=fl.index, y=line, name='Netto cumulato' if cumulative else 'Netto',
+                                     mode='lines+markers', line=dict(color='#2196F3', width=3)))
+            fig.update_layout(title=title, barmode='relative', yaxis_title='€', hovermode='x unified',
+                              legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
+            st.plotly_chart(fig, use_container_width=True)
 
-        if filter_mode != "Month": 
-            # Group by Month-Year
-            try:
-                trend_df = filtered_df.copy()
-                trend_df['month_date'] = trend_df['date'].apply(lambda d: d.replace(day=1))
-                
-                if not trend_df.empty:
-                    # Safe Pivot
-                    grp = trend_df.pivot_table(index='month_date', columns='type', values='amount', aggfunc='sum', fill_value=0)
-                    
-                    if 'Income' not in grp.columns: grp['Income'] = 0.0
-                    if 'Expense' not in grp.columns: grp['Expense'] = 0.0
-                    
-                    grp['Balance'] = grp['Income'] + grp['Expense']
-                    
-                    monthly_stats = grp.reset_index()
-                    
-                    if not monthly_stats.empty:
-                        st.subheader("Monthly Balance Trend")
-                        fig_combo = go.Figure()
-                        fig_combo.add_trace(go.Bar(x=monthly_stats['month_date'], y=monthly_stats['Income'], name='Income', marker_color='#4CAF50'))
-                        fig_combo.add_trace(go.Bar(x=monthly_stats['month_date'], y=monthly_stats['Expense'], name='Expenses', marker_color='#EF5350'))
-                        fig_combo.add_trace(go.Scatter(x=monthly_stats['month_date'], y=monthly_stats['Balance'], name='Net Balance', mode='lines+markers', line=dict(color='#2196F3', width=3), marker=dict(size=8)))
-                        
-                        fig_combo.update_layout(title="Monthly Income, Expenses & Balance", barmode='overlay', xaxis_title="Month", yaxis_title="Amount (€)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
-                        st.plotly_chart(fig_combo, use_container_width=True)
-                    else:
-                        st.info("No data for trend.")
-                else:
-                    st.info("No data for trend.")
-            except Exception as e:
-                st.error(f"Error showing trend: {e}")
-                
-            # Net Worth Chart
-            st.subheader("📈 Total Net Worth Evolution")
-            try:
-                nw_df = df.sort_values('date').copy()
-                nw_df['cumulative_balance'] = nw_df['amount'].cumsum()
-                
-                if filter_mode == "Year":
-                     start_of_year = pd.Timestamp(selected_year, 1, 1).date()
-                     end_of_year = pd.Timestamp(selected_year, 12, 31).date()
-                     chart_nw = nw_df[(nw_df['date'].dt.date >= start_of_year) & (nw_df['date'].dt.date <= end_of_year)]
-                elif filter_mode == "Custom":
-                     chart_nw = nw_df[(nw_df['date'].dt.date >= start_date) & (nw_df['date'].dt.date <= end_date)]
-                else: 
-                     chart_nw = nw_df
-                
-                if not chart_nw.empty:
-                    daily_nw = chart_nw.groupby('date')['cumulative_balance'].last().reset_index()
-                    fig_nw = px.area(daily_nw, x='date', y='cumulative_balance', title="Total Net Worth Over Time", labels={'cumulative_balance': 'Net Worth (€)'})
-                    fig_nw.update_layout(hovermode="x unified")
-                    fig_nw.update_traces(line_color='#009688', fillcolor='rgba(0, 150, 136, 0.3)')
-                    st.plotly_chart(fig_nw, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error calculating net worth: {e}")
-        
+        st.subheader("📊 Andamento")
+        if is_month:
+            fl = _flows(filtered_df, filtered_df['date'].dt.date)
+            if not fl.empty:
+                _flow_chart(fl, f"Giorno per giorno — {period_lbl}", cumulative=True)
+            year_df = df[df['year'] == selected_year]
+            if account_filter:
+                year_df = year_df[year_df['account'].isin(account_filter)]
+            fl_y = _flows(year_df, year_df['date'].dt.to_period('M').dt.to_timestamp())
+            if not fl_y.empty:
+                _flow_chart(fl_y, f"Mese per mese — {selected_year}")
         else:
-             # Yearly Context in Month Mode
-             st.subheader("Yearly Context")
-             try:
-                 year_df = df[df['year'] == selected_year].copy()
-                 year_df['month_date'] = year_df['date'].apply(lambda d: d.replace(day=1))
-                 
-                 if not year_df.empty:
-                     grp = year_df.pivot_table(index='month_date', columns='type', values='amount', aggfunc='sum', fill_value=0)
-                     
-                     if 'Income' not in grp.columns: grp['Income'] = 0.0
-                     if 'Expense' not in grp.columns: grp['Expense'] = 0.0
-                     
-                     grp['Balance'] = grp['Income'] + grp['Expense']
-                     
-                     monthly_stats = grp.reset_index()
-                     
-                     if not monthly_stats.empty:
-                         fig_combo = go.Figure()
-                         fig_combo.add_trace(go.Bar(x=monthly_stats['month_date'], y=monthly_stats['Income'], name='Income', marker_color='#4CAF50'))
-                         fig_combo.add_trace(go.Bar(x=monthly_stats['month_date'], y=monthly_stats['Expense'], name='Expenses', marker_color='#EF5350'))
-                         fig_combo.add_trace(go.Scatter(x=monthly_stats['month_date'], y=monthly_stats['Balance'], name='Net Balance', mode='lines+markers', line=dict(color='#2196F3', width=3)))
-                         
-                         fig_combo.update_layout(title=f"Overview {selected_year}", barmode='relative', hovermode="x unified")
-                         st.plotly_chart(fig_combo, use_container_width=True)
-                 else:
-                     st.info("No data for yearly context.")
-             except Exception as e:
-                 st.error(f"Error showing yearly context: {e}")
+            fl = _flows(filtered_df, filtered_df['date'].dt.to_period('M').dt.to_timestamp())
+            if not fl.empty:
+                _flow_chart(fl, f"Mese per mese — {period_lbl}")
+
+            st.subheader("📈 Patrimonio netto nel tempo")
+            nw_df = df.sort_values('date').copy()
+            nw_df['cumulative_balance'] = nw_df['amount'].cumsum()
+            if filter_mode == "Year":
+                chart_nw = nw_df[nw_df['date'].dt.year == selected_year]
+            elif filter_mode == "Custom":
+                chart_nw = nw_df[(nw_df['date'].dt.date >= start_date) & (nw_df['date'].dt.date <= end_date)]
+            else:
+                chart_nw = nw_df
+            if not chart_nw.empty:
+                daily_nw = chart_nw.groupby('date')['cumulative_balance'].last().reset_index()
+                fig_nw = px.area(daily_nw, x='date', y='cumulative_balance',
+                                 labels={'cumulative_balance': 'Patrimonio (€)', 'date': 'Data'})
+                fig_nw.update_layout(hovermode="x unified")
+                fig_nw.update_traces(line_color='#009688', fillcolor='rgba(0, 150, 136, 0.3)')
+                st.plotly_chart(fig_nw, use_container_width=True)
+                st.caption("Somma di tutti i conti, compresi i crediti/debiti virtuali (Partner, Prestiti).")
 
         st.divider()
 
-        # Budget Progress Bars
+        # --- Budget mensili: hanno senso solo su un mese ---
         budgets = re.rules.get('budgets', {})
-        if budgets and not expense_df.empty:
-            st.subheader("🎯 Budget Progress")
-            budget_cols = st.columns(min(len(budgets), 3))
-            for idx, (cat, budget_amt) in enumerate(budgets.items()):
-                spent = expense_df[expense_df['category'] == cat]['abs_amount'].sum() if not expense_df.empty else 0.0
-                pct = min(spent / budget_amt, 1.0) if budget_amt > 0 else 0.0
-                status = "🔴" if pct >= 0.9 else ("🟡" if pct >= 0.7 else "🟢")
-                with budget_cols[idx % min(len(budgets), 3)]:
-                    with st.container(border=True):
-                        st.markdown(f"{status} **{cat}**")
-                        st.markdown(f"€{spent:,.2f} / €{budget_amt:,.2f}")
-                        st.progress(pct, text=f"{pct*100:.0f}%")
+        if budgets:
+            if is_month:
+                st.subheader("🎯 Budget del mese")
+                budget_cols = st.columns(min(len(budgets), 3))
+                for idx, (cat, budget_amt) in enumerate(budgets.items()):
+                    spent = expense_df[expense_df['category'] == cat]['abs_amount'].sum() if not expense_df.empty else 0.0
+                    pct = min(spent / budget_amt, 1.0) if budget_amt > 0 else 0.0
+                    status = "🔴" if pct >= 0.9 else ("🟡" if pct >= 0.7 else "🟢")
+                    with budget_cols[idx % min(len(budgets), 3)]:
+                        with st.container(border=True):
+                            st.markdown(f"{status} **{cat}**")
+                            st.markdown(f"€{spent:,.2f} / €{budget_amt:,.2f}")
+                            st.progress(pct, text=f"{pct*100:.0f}%")
+            else:
+                st.caption("🎯 I budget sono mensili: per vederli scegli il periodo «Mese».")
             st.divider()
 
-        # Top Transactions (le ripartizioni per categoria/tag sono gia' nei grafici a
-        # torta sopra, con drill-down, e nella tab Analysis -> Categorie)
-        expense_df = filtered_df[filtered_df['type'] == 'Expense'].copy()
-        if not expense_df.empty:
-            expense_df['abs_amount'] = expense_df['amount'].abs()
-
-        st.subheader("🏆 Top Transactions")
-        # Show top 10 largest expenses
+        st.subheader("🏆 Spese più grandi del periodo")
         if not expense_df.empty:
             top_expenses = expense_df.sort_values('abs_amount', ascending=False).head(10)
-            
-            display_cols = top_expenses[['date', 'description', 'category', 'tags', 'amount']]
-            st.dataframe(
-                display_cols.style.format({'amount': '€{:.2f}'}), 
-                use_container_width=True, 
-                hide_index=True
-            )
+            st.dataframe(top_expenses[['date', 'description', 'category', 'tags', 'amount']]
+                         .style.format({'amount': '€{:.2f}'}),
+                         use_container_width=True, hide_index=True,
+                         column_config={'date': 'Data', 'description': 'Descrizione', 'category': 'Categoria',
+                                        'tags': 'Tag', 'amount': 'Importo'})
         else:
-            st.info("No transactions.")
+            st.info("Nessuna spesa nel periodo.")
 
-        # 4. Detailed Transaction List (Optional toggle)
-        with st.expander("View All Transactions in this Period"):
+        with st.expander("Tutti i movimenti del periodo"):
             st.dataframe(filtered_df.sort_values('date', ascending=False), use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error loading dashboard: {e}")
+        st.error(f"Errore nel caricamento della dashboard: {e}")
         import traceback
         st.text(traceback.format_exc())

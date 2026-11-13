@@ -5,11 +5,11 @@ from src.data_manager import DataManager
 
 def render_settings(data_manager: DataManager):
     import pandas as pd
-    st.header("Settings & Rules")
+    st.header("⚙️ Impostazioni e regole")
     
     # --- Initial Balance ---
-    st.subheader("💰 Initial Balance (Patrimonio Iniziale)")
-    st.info("Set the starting point for your Net Worth calculation.")
+    st.subheader("💰 Saldo iniziale")
+    st.info("Il punto di partenza per il calcolo del patrimonio.")
     
     current_init = data_manager.get_initial_balance()
     
@@ -31,13 +31,13 @@ def render_settings(data_manager: DataManager):
 
     col_ib1, col_ib2, col_ib3 = st.columns([1, 1, 1])
     with col_ib1:
-        init_date = st.date_input("Start Date", value=default_date)
+        init_date = st.date_input("Data di inizio", value=default_date)
     with col_ib2:
-        init_amount = st.number_input("Starting Amount (€)", value=default_amount, step=100.0)
+        init_amount = st.number_input("Importo iniziale (€)", value=default_amount, step=100.0)
         
-    if st.button("Save Initial Balance"):
+    if st.button("Salva saldo iniziale"):
         data_manager.set_initial_balance(init_date, init_amount)
-        st.success(f"Initial Balance updated: €{init_amount:,.2f} on {init_date}")
+        st.success(f"Saldo iniziale aggiornato: €{init_amount:,.2f} al {init_date}")
         st.rerun()
 
     st.divider()
@@ -46,20 +46,20 @@ def render_settings(data_manager: DataManager):
     rules_engine = data_manager.rules_engine
     current_rules = rules_engine.rules
 
-    st.subheader("Categorization Rules")
-    st.info("Define keywords to automatically categorize transactions and set them as Need or Want.")
+    st.subheader("🏷️ Regole di categorizzazione")
+    st.info("Parole chiave per categorizzare in automatico i movimenti e classificarli come Necessità o Desiderio.")
 
     # Display Categories
     if 'categories' in current_rules:
         # We'll use a form to allow batch updates or just simple expanders
         
         # New Category Form
-        with st.expander("➕ Add New Category"):
+        with st.expander("➕ Nuova categoria"):
             with st.form("add_cat_form"):
-                new_cat_name = st.text_input("Category Name")
-                new_cat_necessity = st.selectbox("Necessity", ["Need", "Want"])
+                new_cat_name = st.text_input("Nome categoria")
+                new_cat_necessity = st.selectbox("Necessità", ["Need", "Want"])
                 new_cat_keywords = st.text_area("Keywords (comma separated)", help="e.g. amazon, ebay, shop")
-                submitted = st.form_submit_button("Add Category")
+                submitted = st.form_submit_button("Aggiungi categoria")
                 
                 if submitted and new_cat_name:
                     keywords = [k.strip() for k in new_cat_keywords.split(',') if k.strip()]
@@ -70,7 +70,7 @@ def render_settings(data_manager: DataManager):
                     }
                     current_rules['categories'].append(new_rule)
                     rules_engine.save_rules(current_rules)
-                    st.success(f"Added {new_cat_name}!")
+                    st.success(f"Aggiunta {new_cat_name}!")
                     st.rerun()
 
         # Edit Existing
@@ -79,8 +79,8 @@ def render_settings(data_manager: DataManager):
         categories = current_rules.get('categories', [])
         for i, cat in enumerate(categories):
             with st.expander(f"{cat.get('name')} ({cat.get('necessity', 'Want')})"):
-                name = st.text_input(f"Name #{i}", cat.get('name'), key=f"name_{i}")
-                necessity = st.selectbox(f"Necessity #{i}", ["Need", "Want"], 
+                name = st.text_input(f"Nome #{i}", cat.get('name'), key=f"name_{i}")
+                necessity = st.selectbox(f"Necessità #{i}", ["Need", "Want"], 
                                        index=0 if cat.get('necessity') == 'Need' else 1, 
                                        key=f"nec_{i}")
                 
@@ -94,7 +94,7 @@ def render_settings(data_manager: DataManager):
                     cat['necessity'] = necessity
                     cat['match'] = keywords
                     rules_engine.save_rules(current_rules)
-                    st.success("Updated!")
+                    st.success("Aggiornato!")
                 
                 if col_delete.button("Delete Strategy", key=f"btn_del_{i}"):
                     current_rules['categories'].pop(i)
@@ -104,7 +104,7 @@ def render_settings(data_manager: DataManager):
     st.divider()
 
     # --- Necessity by Category & Tag ---
-    st.subheader("⚖️ Necessity Rules")
+    st.subheader("⚖️ Necessità o desiderio")
     st.caption("Classifica categorie e tag come **Need** (bisogno) o **Want** (desiderio). Verrà applicato ad ogni transazione corrispondente.")
 
     # Fetch transaction counts for context
@@ -180,7 +180,7 @@ def render_settings(data_manager: DataManager):
                                    label_visibility="collapsed")
                     new_cat_necessity[cat] = val
 
-        if st.button("💾 Salva Necessity Categorie", type="primary"):
+        if st.button("💾 Salva (categorie)", type="primary"):
             current_rules['category_necessity'] = new_cat_necessity
             rules_engine.save_rules(current_rules)
             st.success(f"Salvato! {sum(1 for v in new_cat_necessity.values() if v=='Need')} Need · {sum(1 for v in new_cat_necessity.values() if v=='Want')} Want")
@@ -227,7 +227,7 @@ def render_settings(data_manager: DataManager):
                                        label_visibility="collapsed")
                         new_tag_necessity[tag] = val
 
-            if st.button("💾 Salva Necessity Tag", type="primary"):
+            if st.button("💾 Salva (tag)", type="primary"):
                 current_rules['tag_necessity'] = new_tag_necessity
                 rules_engine.save_rules(current_rules)
                 st.success(f"Salvato! {sum(1 for v in new_tag_necessity.values() if v=='Need')} Need · {sum(1 for v in new_tag_necessity.values() if v=='Want')} Want")
@@ -235,12 +235,12 @@ def render_settings(data_manager: DataManager):
 
     st.divider()
 
-    st.subheader("Advanced Actions")
+    st.subheader("🛠️ Azioni avanzate")
     
     col_adv_1, col_adv_2 = st.columns(2)
     
     with col_adv_1:
-        if st.button("Apply Rules to All Data"):
+        if st.button("Applica le regole a tutti i movimenti"):
             with st.spinner("Re-applying rules to database..."):
                  try:
                      df = data_manager.get_transactions()
@@ -270,24 +270,24 @@ def render_settings(data_manager: DataManager):
 
                          st.success(f"Rules applied to {len(df)} transactions — {changed_cat} categorie aggiornate, {changed_nec} necessity aggiornate.")
                      else:
-                         st.warning("No data to process.")
+                         st.warning("Nessun dato da elaborare.")
                  except Exception as e:
-                     st.error(f"Error applying rules: {e}")
+                     st.error(f"Errore nell'applicare le regole: {e}")
 
     with col_adv_2:
-        if st.button("Fix +/- Signs (Expense/Income)"):
+        if st.button("Correggi i segni +/- (spese/entrate)"):
             with st.spinner("Fixing signs..."):
                 try:
                     # Update Expense to be negative
                     data_manager.con.execute("UPDATE transactions SET amount = -ABS(amount) WHERE type = 'Expense'")
                     # Update Income to be positive
                     data_manager.con.execute("UPDATE transactions SET amount = ABS(amount) WHERE type = 'Income'")
-                    st.success("Signs fixed! Expenses are now negative, Income positive.")
+                    st.success("Segni corretti: spese negative, entrate positive.")
                 except Exception as e:
-                    st.error(f"Error fixing signs: {e}")
+                    st.error(f"Errore nella correzione dei segni: {e}")
 
     st.divider()
-    st.subheader("⚖️ Reconcile Balances (Allineamento Saldo)")
+    st.subheader("⚖️ Allinea il saldo alla banca")
     st.info("Use this to force the app's balance to match your real bank account. It will insert a 'Balance Adjustment' transaction.")
     
     # Get current balances
@@ -299,19 +299,19 @@ def render_settings(data_manager: DataManager):
         # UI for adjustment
         col_rec_1, col_rec_2, col_rec_3 = st.columns([2, 1, 1])
         with col_rec_1:
-            rec_acc = st.selectbox("Select Account", options=data_manager.get_unique_accounts() + ["New Account..."], key="rec_acc")
+            rec_acc = st.selectbox("Conto", options=data_manager.get_unique_accounts() + ["New Account..."], key="rec_acc")
             if rec_acc == "New Account...":
-                rec_acc = st.text_input("Account Name", key="rec_acc_new")
+                rec_acc = st.text_input("Nome conto", key="rec_acc_new")
         
         current_val = bal_dict.get(rec_acc, 0.0)
         
         with col_rec_2:
-            st.metric("Current App Balance", f"€{current_val:,.2f}")
+            st.metric("Saldo nell'app", f"€{current_val:,.2f}")
             
         with col_rec_3:
-            target_val = st.number_input("Real Balance (Realidad)", value=float(current_val), step=10.0, key="rec_target")
+            target_val = st.number_input("Saldo reale in banca", value=float(current_val), step=10.0, key="rec_target")
             
-        if st.button("Update Balance"):
+        if st.button("Allinea saldo"):
             diff = target_val - current_val
             if abs(diff) > 0.001:
                 # Insert adjustment
@@ -329,18 +329,18 @@ def render_settings(data_manager: DataManager):
                 """
                 data_manager.con.execute(q, [today, diff, rec_acc])
                 
-                st.success(f"Adjusted {rec_acc} by €{diff:,.2f}. New Balance should be €{target_val:,.2f}")
+                st.success(f"{rec_acc} corretto di €{diff:,.2f}. Nuovo saldo: €{target_val:,.2f}")
                 st.rerun()
             else:
-                st.info("Balances match. No adjustment needed.")
+                st.info("I saldi coincidono: nessuna correzione necessaria.")
                 
     except Exception as e:
-        st.error(f"Error checking balances: {e}")
+        st.error(f"Errore nel controllo dei saldi: {e}")
 
     st.divider()
     
     # --- Wallet Management (Rename & Icon) ---
-    st.subheader("👛 Manage Wallets (Rename & Icons)")
+    st.subheader("👛 Conti (nome e icona)")
 
     # Load rules for icons
     rules = rules_engine.rules
@@ -372,10 +372,10 @@ def render_settings(data_manager: DataManager):
     col_w1, col_w2, col_w3 = st.columns([2, 2, 1])
     
     with col_w1:
-        target_account = st.selectbox("Select Wallet to Edit", accounts, key='wallet_edit_sel')
+        target_account = st.selectbox("Conto da modificare", accounts, key='wallet_edit_sel')
         
     with col_w2:
-        new_name = st.text_input("Rename to", value=target_account, key='wallet_rename_input')
+        new_name = st.text_input("Nuovo nome", value=target_account, key='wallet_rename_input')
         
     with col_w3:
         # Icon picker
@@ -387,7 +387,7 @@ def render_settings(data_manager: DataManager):
         icon_options = ["👛", "🏦", "💳", "💵", "🐷", "📈", "🏠", "🚗", "👶", "✈️", "🎁", "🔧"]
         selected_icon = st.selectbox("Icon", icon_options, index=icon_options.index(current_icon_conf) if current_icon_conf in icon_options else 0)
         
-    if st.button("Save Wallet Changes"):
+    if st.button("Salva conto"):
         try:
             # 1. Update Name in DB if changed
             if target_account != new_name:
@@ -405,13 +405,13 @@ def render_settings(data_manager: DataManager):
             rules['wallets'][new_name]['icon'] = selected_icon
             rules_engine.save_rules(rules)
             
-            st.success("Wallet settings saved!")
+            st.success("Conto salvato!")
             st.rerun()
             
             st.rerun()
             
         except Exception as e:
-            st.error(f"Error saving changes: {e}")
+            st.error(f"Errore nel salvataggio: {e}")
 
     st.divider()
 
@@ -588,7 +588,7 @@ def render_settings(data_manager: DataManager):
                 if val > 0:
                     updated_budgets[cat] = val
 
-        if st.button("💾 Save Budgets"):
+        if st.button("💾 Salva budget"):
             current_rules['budgets'] = updated_budgets
             rules_engine.save_rules(current_rules)
             st.success(f"Budgets salvati per {len(updated_budgets)} categorie.")
@@ -599,8 +599,8 @@ def render_settings(data_manager: DataManager):
     st.divider()
 
     # --- Backup & Export ---
-    st.subheader("📦 Backup & Export")
-    st.write("Download a ZIP file containing all your transactions formatted as CSVs.")
+    st.subheader("📦 Backup ed export")
+    st.write("Scarica uno ZIP con tutti i movimenti in formato CSV.")
     
     zip_data = data_manager.export_backup_zip()
     st.download_button(
