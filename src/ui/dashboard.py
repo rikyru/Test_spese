@@ -34,8 +34,18 @@ def render_dashboard(data_manager):
         render_wants_envelope(df, re)
         render_installments_panel(data_manager)
         try:
+            _cl = data_manager.get_closings()
+            _last = pd.to_datetime(_cl['closing_date']).max() if not _cl.empty else None
+            if _last is None or (pd.Timestamp.today() - _last).days > 35:
+                st.caption("🧾 " + (f"Ultima chiusura conti il {_last.strftime('%d/%m')}" if _last is not None
+                                   else "Nessuna chiusura conti ancora") +
+                           ": inserisci i saldi reali in **Chiusura conti** per tenere l'app allineata alla banca.")
+        except Exception:
+            pass
+        try:
             from src.ui.data_quality import quality_checks, issues_count
-            _n_dq = issues_count(quality_checks(df, data_manager.get_recurring()))
+            _n_dq = issues_count(quality_checks(df, data_manager.get_recurring(),
+                                                re.rules.get('archived_accounts') or []))
             if _n_dq:
                 st.caption(f"🩺 {_n_dq} controlli sui dati da guardare (possono falsare saldi e analisi) "
                            "→ **Impostazioni › Qualità dei dati**")
@@ -205,7 +215,17 @@ def render_dashboard(data_manager):
             all_balances = full_df.groupby('account')['amount'].sum().reset_index()
             # Conti virtuali (Partner, Prestiti) = crediti/debiti, NON liquidità spendibile
             virtual_bal = all_balances[all_balances['account'].isin(VIRTUAL_ACCOUNTS)]
-            balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS)].reset_index(drop=True)
+            archived = set(re.rules.get('archived_accounts') or [])
+            balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS | archived)].reset_index(drop=True)
+            # Addebiti ricorrenti mensili per conto (es. mutuo su MPS): quanti ne copre il saldo
+            rec_month = {}
+            try:
+                _rec = data_manager.get_recurring()
+                _f = {'Monthly': 1.0, 'Bimonthly': 0.5, 'Quarterly': 1 / 3, 'Yearly': 1 / 12, 'Weekly': 4.33}
+                for _, _r in _rec.iterrows():
+                    rec_month[_r['account']] = rec_month.get(_r['account'], 0.0) +                         abs(_r['amount']) * _f.get(_r['frequency'], 1.0)
+            except Exception:
+                pass
             total_liquidity = liquid_balance(full_df)
 
             # --- Total Liquidity Big Card ---
@@ -273,6 +293,12 @@ def render_dashboard(data_manager):
                                 title += " &nbsp;<span style='background:#FFF3E0;color:#E65100;border-radius:4px;padding:1px 6px;font-size:0.7em;font-weight:700;'>⭐ PRINCIPALE</span>"
                             st.markdown(title, unsafe_allow_html=True)
                             st.markdown(f"<h3 style='margin:0; color: {color};'>€ {bal:,.2f}</h3>", unsafe_allow_html=True)
+                            # Conti usati solo per addebiti (mutuo): quanti mesi coprono ancora
+                            if not is_main and rec_month.get(acc_name, 0) >= 50:
+                                n_cov = bal / rec_month[acc_name]
+                                st.caption(("⚠️ " if n_cov < 2 else "") +
+                                           f"Copre ~{max(n_cov, 0):.1f} mesi di addebiti ricorrenti "
+                                           f"(€{rec_month[acc_name]:,.0f}/mese)")
 
             # --- 🛟 Fondo Emergenza ---
             if not real_expenses(full_df).empty:

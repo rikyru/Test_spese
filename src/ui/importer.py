@@ -74,7 +74,7 @@ def render_importer(data_manager: DataManager):
                             p_cat = st.text_input("Nome nuova categoria")
                             
                         # Wallet
-                        accounts = data_manager.get_unique_accounts()
+                        accounts = data_manager.get_unique_accounts(include_archived=False)
                         p_account = st.selectbox("Conto", accounts if accounts else ["Cash"])
                         
                     # Tags
@@ -190,7 +190,7 @@ def render_importer(data_manager: DataManager):
                     b_cat = st.selectbox("Categoria", cats, index=default_cat_idx)
                     
                     # Wallet selection
-                    accounts = data_manager.get_unique_accounts()
+                    accounts = data_manager.get_unique_accounts(include_archived=False)
                     b_account = st.selectbox("Pagata dal conto", accounts if accounts else ["Cash"])
                     
                     # Tags

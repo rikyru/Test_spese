@@ -261,6 +261,15 @@ class DataManager:
             )
         """)
 
+        # Registro delle chiusure conti mensili (saldo app vs reale per conto)
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS account_closings (
+                closing_date DATE, account VARCHAR,
+                app_balance DOUBLE, real_balance DOUBLE, diff DOUBLE,
+                details VARCHAR, created_at TIMESTAMP DEFAULT now()
+            )
+        """)
+
         # Buste paga caricate (una riga per busta: mese + tipo)
         self.con.execute("""
             CREATE TABLE IF NOT EXISTS payslips (
@@ -1073,12 +1082,36 @@ class DataManager:
                 out[cat] = int(round(med / 10) * 10)
         return out
 
-    def get_unique_accounts(self):
+    def get_unique_accounts(self, include_archived=True):
+        """Conti presenti nei movimenti. Con include_archived=False esclude i conti
+        archiviati (rules.yaml → archived_accounts): da usare nei selettori per
+        nuovi movimenti; lo storico resta modificabile con tutti i conti."""
         try:
             res = self.con.execute("SELECT DISTINCT account FROM transactions WHERE account IS NOT NULL ORDER BY 1").fetchall()
-            return [r[0] for r in res if r[0]]
+            accounts = [r[0] for r in res if r[0]]
         except:
             return []
+        if not include_archived:
+            archived = set(self.rules_engine.rules.get('archived_accounts') or [])
+            accounts = [a for a in accounts if a not in archived]
+        return accounts
+
+    def get_account_balances(self):
+        """Saldo attuale di ogni conto (somma di tutti i movimenti)."""
+        rows = self.con.execute("SELECT account, SUM(amount) FROM transactions GROUP BY 1").fetchall()
+        return {a: float(b or 0) for a, b in rows if a}
+
+    def save_closing(self, closing_date, rows, details=None):
+        """rows: lista di (conto, saldo_app, saldo_reale). details: valori dei sottoconti."""
+        import json
+        for acc, app_b, real_b in rows:
+            self.con.execute(
+                "INSERT INTO account_closings (closing_date, account, app_balance, real_balance, diff, details) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [closing_date, acc, app_b, real_b, real_b - app_b, json.dumps(details or {})])
+
+    def get_closings(self):
+        return self.con.execute("SELECT * FROM account_closings ORDER BY closing_date, account").df()
 
     # --- Main Wallet (Portafoglio Principale) ---
     def get_main_wallet(self):

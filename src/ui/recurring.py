@@ -226,7 +226,7 @@ def render_recurring(data_manager: DataManager):
                    r_cat = r_cat_custom if r_cat_custom else "General"
                    
             with col2:
-                r_acc = st.selectbox("Conto", data_manager.get_unique_accounts())
+                r_acc = st.selectbox("Conto", data_manager.get_unique_accounts(include_archived=False))
                 r_freq = st.selectbox("Frequenza", ["Monthly", "Bimonthly", "Quarterly", "Yearly", "Weekly"])
                 r_date = st.date_input("Prossima scadenza")
 

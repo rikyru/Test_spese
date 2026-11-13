@@ -373,7 +373,7 @@ def render_split(data_manager: DataManager):
             grp['aperto'] = grp['prestato'] - grp['restituito']
 
             with st.expander(f"💸 Dettaglio prestiti con {conf['partner_name']}", expanded=True):
-                accts_report = [a for a in (data_manager.get_unique_accounts() or ['Contanti'])
+                accts_report = [a for a in (data_manager.get_unique_accounts(include_archived=False) or ['Contanti'])
                                 if a not in ('Partner', 'Prestiti')] or ['Contanti']
                 rec_acc_p = st.selectbox("Conto di rientro (per 'segna restituito')", accts_report, key="prep_acc")
                 for _, r in grp.iterrows():
@@ -539,7 +539,7 @@ def render_split(data_manager: DataManager):
         lc2.metric("✅ Già restituiti", f"€{restituito:,.2f}")
         lc3.metric("Totale prestato", f"€{prestato:,.2f}")
 
-        accts = data_manager.get_unique_accounts() or ["Contanti"]
+        accts = data_manager.get_unique_accounts(include_archived=False) or ["Contanti"]
         c1, c2 = st.columns(2)
         with c1:
             with st.form("loan_add_form", clear_on_submit=True):

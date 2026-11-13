@@ -12,6 +12,7 @@ from src.ui.recurring import render_recurring
 from src.ui.split import render_split
 from src.ui.tag_manager import render_tag_manager
 from src.ui.payslips import render_payslips
+from src.ui.account_closing import render_account_closing
 from src.ui.styling import apply_custom_styles
 
 st.set_page_config(page_title="Finance Dashboard", layout="wide", page_icon="💸")
@@ -80,7 +81,7 @@ if global_search:
 elif 'global_search' not in st.session_state:
     st.session_state['global_search'] = ''
 
-page = st.sidebar.radio("Sezione", ["Dashboard", "Movimenti", "Ricorrenti", "Spese condivise", "Analisi", "Buste Paga", "Tag", "Importa", "Impostazioni"])
+page = st.sidebar.radio("Sezione", ["Dashboard", "Movimenti", "Ricorrenti", "Spese condivise", "Analisi", "Buste Paga", "Chiusura conti", "Tag", "Importa", "Impostazioni"])
 
 # If there's an active search, force Transactions page
 if global_search:
@@ -105,7 +106,7 @@ main_wallet = dm.get_main_wallet()
 with st.sidebar.expander("➕ Aggiungi Transazione", expanded=False):
     # Fetch options
     cats = dm.get_unique_categories()
-    accounts = dm.get_unique_accounts()
+    accounts = dm.get_unique_accounts(include_archived=False)
     existing_tags = dm.get_unique_tags()
     if hasattr(dm, 'rules_engine') and 'tags' in dm.rules_engine.rules:
         rules_tags = [t['tag'] for t in dm.rules_engine.rules['tags']]
@@ -222,7 +223,7 @@ st.sidebar.divider()
 
 # Trasferimento tra conti
 with st.sidebar.expander("🔄 Trasferimento tra conti", expanded=False):
-    _tf_accs = dm.get_unique_accounts()
+    _tf_accs = dm.get_unique_accounts(include_archived=False)
     if len(_tf_accs) >= 2:
         with st.form("transfer_form", clear_on_submit=True):
             tf_from = st.selectbox("Da", _tf_accs, key='tf_from')
@@ -289,6 +290,8 @@ elif page == "Analisi":
     render_analysis(dm)
 elif page == "Buste Paga":
     render_payslips(dm)
+elif page == "Chiusura conti":
+    render_account_closing(dm)
 elif page == "Tag":
     render_tag_manager(dm)
 elif page == "Importa":

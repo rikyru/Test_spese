@@ -303,7 +303,7 @@ def render_settings(data_manager: DataManager):
         # UI for adjustment
         col_rec_1, col_rec_2, col_rec_3 = st.columns([2, 1, 1])
         with col_rec_1:
-            rec_acc = st.selectbox("Conto", options=data_manager.get_unique_accounts() + ["New Account..."], key="rec_acc")
+            rec_acc = st.selectbox("Conto", options=data_manager.get_unique_accounts(include_archived=False) + ["New Account..."], key="rec_acc")
             if rec_acc == "New Account...":
                 rec_acc = st.text_input("Nome conto", key="rec_acc_new")
         

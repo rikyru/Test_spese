@@ -6,14 +6,16 @@ from src.insights import (unmatched_transfers, negative_accounts, recurring_on_a
                           stale_accounts, possible_duplicates, untagged_or_unclassified)
 
 
-def quality_checks(df, rec_df):
-    """Esegue i controlli; ritorna dict nome → DataFrame dei casi trovati."""
+def quality_checks(df, rec_df, archived=()):
+    """Esegue i controlli; ritorna dict nome → DataFrame dei casi trovati.
+    I conti archiviati (fuori uso) sono esclusi dai controlli sui saldi."""
     no_tags, no_nec = untagged_or_unclassified(df)
+    skip = set(VIRTUAL_ACCOUNTS) | set(archived)
     last12 = pd.to_datetime(df['date']) >= pd.Timestamp.today() - pd.DateOffset(months=12)
     return {
-        'negativi': negative_accounts(df, VIRTUAL_ACCOUNTS),
+        'negativi': negative_accounts(df, skip),
         'trasferimenti': unmatched_transfers(df),
-        'fermi': stale_accounts(df, virtual=VIRTUAL_ACCOUNTS),
+        'fermi': stale_accounts(df, virtual=skip),
         'doppioni': possible_duplicates(df[last12]),
         'senza_tag': no_tags[pd.to_datetime(no_tags['date']) >= pd.Timestamp.today() - pd.DateOffset(months=12)],
         'senza_necessita': no_nec,
@@ -35,7 +37,7 @@ def render_data_quality(data_manager):
         st.info("Nessun dato.")
         return
     rec = data_manager.get_recurring()
-    c = quality_checks(df, rec)
+    c = quality_checks(df, rec, data_manager.rules_engine.rules.get('archived_accounts') or [])
     n = issues_count(c)
     if n == 0:
         st.success("Nessun problema rilevato: saldi e analisi si basano su dati coerenti.")
