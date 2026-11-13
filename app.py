@@ -13,6 +13,7 @@ from src.ui.split import render_split
 from src.ui.tag_manager import render_tag_manager
 from src.ui.payslips import render_payslips
 from src.ui.account_closing import render_account_closing
+from src.ui.investments import render_investments
 from src.ui.styling import apply_custom_styles
 
 st.set_page_config(page_title="Finance Dashboard", layout="wide", page_icon="💸")
@@ -81,7 +82,7 @@ if global_search:
 elif 'global_search' not in st.session_state:
     st.session_state['global_search'] = ''
 
-page = st.sidebar.radio("Sezione", ["Dashboard", "Movimenti", "Ricorrenti", "Spese condivise", "Analisi", "Buste Paga", "Chiusura conti", "Tag", "Importa", "Impostazioni"])
+page = st.sidebar.radio("Sezione", ["Home", "Movimenti", "Ricorrenti", "Spese condivise", "Analisi", "Investimenti", "Buste Paga", "Chiusura conti", "Tag", "Importa", "Impostazioni"])
 
 # If there's an active search, force Transactions page
 if global_search:
@@ -278,7 +279,7 @@ with st.sidebar.expander("💾 Backup & Ripristino", expanded=False):
             else:
                 st.error(msg)
 
-if page == "Dashboard":
+if page == "Home":
     render_dashboard(dm)
 elif page == "Movimenti":
     render_transactions(dm)
@@ -288,6 +289,8 @@ elif page == "Spese condivise":
     render_split(dm)
 elif page == "Analisi":
     render_analysis(dm)
+elif page == "Investimenti":
+    render_investments(dm)
 elif page == "Buste Paga":
     render_payslips(dm)
 elif page == "Chiusura conti":

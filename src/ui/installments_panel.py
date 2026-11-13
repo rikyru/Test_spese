@@ -23,11 +23,11 @@ def render_installments_panel(data_manager):
     new = rows[rows['nuova']]
 
     with st.container(border=True):
-        msg = (f"**💳 Rate attive: {len(rows)}** · €{next_month:,.0f} il mese prossimo · "
+        msg = (f"**Rate attive: {len(rows)}** · €{next_month:,.0f} il mese prossimo · "
                f"ancora da pagare €{residuo:,.0f} · **da {_m(last_p + 1)} libere**")
         st.markdown(msg)
         if not new.empty:
-            st.caption("🆕 Appena aperta: " + ", ".join(f"{r['nome']} (€{r['importo']:,.0f} × {r['totali']})"
+            st.caption("Appena aperta: " + ", ".join(f"{r['nome']} (€{r['importo']:,.0f} × {r['totali']})"
                                                       for _, r in new.iterrows())
                        + " — ogni rata nuova riduce il margine dei prossimi mesi.")
         with st.expander("Dettaglio rate"):

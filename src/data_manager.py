@@ -261,6 +261,20 @@ class DataManager:
             )
         """)
 
+        # Investimenti: fotografie del portafoglio (da screenshot) e cache dei prezzi
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS investment_snapshots (
+                snapshot_date DATE, account VARCHAR, name VARCHAR, symbol VARCHAR, yahoo VARCHAR,
+                qty DOUBLE, price DOUBLE, currency VARCHAR, value DOUBLE, pct DOUBLE, cost DOUBLE,
+                is_cash BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS price_cache (
+                yahoo VARCHAR PRIMARY KEY, price DOUBLE, currency VARCHAR, fetched_at TIMESTAMP
+            )
+        """)
+
         # Registro delle chiusure conti mensili (saldo app vs reale per conto)
         self.con.execute("""
             CREATE TABLE IF NOT EXISTS account_closings (
@@ -1109,6 +1123,34 @@ class DataManager:
                 "INSERT INTO account_closings (closing_date, account, app_balance, real_balance, diff, details) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 [closing_date, acc, app_b, real_b, real_b - app_b, json.dumps(details or {})])
+
+    def save_investment_snapshot(self, snapshot_date, account, positions):
+        """Sostituisce la fotografia del portafoglio di quel giorno. positions: lista di
+        dict con name, symbol, yahoo, qty, price, currency, value, pct, cost, is_cash."""
+        self.con.execute("DELETE FROM investment_snapshots WHERE snapshot_date = ? AND account = ?",
+                         [snapshot_date, account])
+        for p in positions:
+            self.con.execute(
+                "INSERT INTO investment_snapshots (snapshot_date, account, name, symbol, yahoo, qty, price, "
+                "currency, value, pct, cost, is_cash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [snapshot_date, account, p.get('name'), p.get('symbol'), p.get('yahoo'), p.get('qty'),
+                 p.get('price'), p.get('currency'), p.get('value'), p.get('pct'), p.get('cost'),
+                 bool(p.get('is_cash'))])
+
+    def get_investment_snapshots(self, account=None):
+        q = "SELECT * FROM investment_snapshots" + (" WHERE account = ?" if account else "") +             " ORDER BY snapshot_date, name"
+        return self.con.execute(q, [account] if account else []).df()
+
+    def get_cached_prices(self, max_age_hours=6):
+        """Prezzi in cache più recenti di max_age_hours: yahoo → (prezzo, valuta)."""
+        rows = self.con.execute(
+            "SELECT yahoo, price, currency FROM price_cache WHERE fetched_at >= now() - INTERVAL (?) HOUR",
+            [max_age_hours]).fetchall()
+        return {y: (p, c) for y, p, c in rows}
+
+    def cache_price(self, yahoo, price, currency):
+        self.con.execute("DELETE FROM price_cache WHERE yahoo = ?", [yahoo])
+        self.con.execute("INSERT INTO price_cache VALUES (?, ?, ?, now())", [yahoo, price, currency])
 
     def get_closings(self):
         return self.con.execute("SELECT * FROM account_closings ORDER BY closing_date, account").df()

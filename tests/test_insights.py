@@ -88,3 +88,49 @@ def test_month_summary_compares_with_previous_12_months():
     cat = s['cats'].set_index('categoria').loc['Spesa']
     assert cat['media'] == 1000.0 and cat['scarto'] == 500.0
     assert s['salary']['saldo'] == 500.0
+
+
+# --- Investimenti ---
+def _ocr_item(x, y, text, w=100, h=18):
+    return ([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], text, 0.9)
+
+
+def test_parse_revolut_screenshot_and_reconcile():
+    from src.investments import parse_revolut_screenshot, reconcile_with_total
+    items = [_ocr_item(87, 352, 'Conto di intermediazione'), _ocr_item(87, 375, '199,99 €'), _ocr_item(161, 375, '17,39%'),
+             _ocr_item(84, 436, 'Saldo disponibile'), _ocr_item(337, 439, '1,12 €'),
+             _ocr_item(85, 503, 'STMicroelectronics N.V'), _ocr_item(323, 503, '67,87 €'),
+             _ocr_item(85, 525, '1,62 SGM . 41,78 €'), _ocr_item(337, 525, '9,51%'),
+             _ocr_item(85, 579, 'Knorr-Bremse AG'), _ocr_item(321, 579, '52,57 €'),
+             _ocr_item(85, 601, '0,53 KBX . 99,10 €'), _ocr_item(347, 601, '42%'),
+             _ocr_item(84, 654, 'L&G Cyber Security Acc ETF'), _ocr_item(321, 655, '45,37 €'),
+             _ocr_item(85, 677, '1,1 USPY'), _ocr_item(157, 679, '40,91 €'), _ocr_item(333, 677, '9,26%'),
+             _ocr_item(84, 728, 'Ionq'), _ocr_item(319, 731, '33,06 €'),
+             _ocr_item(85, 753, '1,27 IONQ . 28,74 $'), _ocr_item(327, 755, '42,94%')]
+    p = parse_revolut_screenshot(items)          # senza immagine: segno non ricavabile → positivo
+    assert p['total'] == 199.99 and p['cash'] == 1.12 and len(p['positions']) == 4
+    syms = [x['symbol'] for x in p['positions']]
+    assert syms == ['SGM', 'KBX', 'USPY', 'IONQ']
+    assert p['positions'][3]['currency'] == 'USD' and p['positions'][0]['qty'] == 1.62
+    # con i segni (come dal colore rosso) e la % di KBX letta male
+    p['total_pct'] = -17.39
+    for x in p['positions']:
+        x['pct'] = -abs(x['pct'])
+    r = reconcile_with_total(p)
+    kbx = r['positions'][1]
+    assert kbx.get('fixed') and kbx['pct'] == pytest.approx(-9.4, abs=0.05)
+    assert r['positions'][3]['pct'] == -42.94
+
+
+def test_portfolio_value_and_pac():
+    from src.investments import portfolio_value, pac_projection, guess_yahoo
+    h = pd.DataFrame([{'name': 'A', 'yahoo': 'A.DE', 'qty': 2.0, 'value': 100.0, 'cost': 120.0, 'is_cash': False},
+                      {'name': 'B', 'yahoo': 'B', 'qty': 1.0, 'value': 50.0, 'cost': 40.0, 'is_cash': False},
+                      {'name': 'Liquidità', 'yahoo': None, 'qty': None, 'value': 5.0, 'cost': 5.0, 'is_cash': True}])
+    pv = portfolio_value(h, {'A.DE': (60.0, 'EUR'), 'B': (110.0, 'USD')}, {'USD': 1.1})
+    assert list(pv['value_now']) == pytest.approx([120.0, 100.0, 5.0])
+    assert pv.loc[0, 'gain'] == pytest.approx(0.0) and pv.loc[1, 'gain_pct'] == pytest.approx(150.0)
+    assert guess_yahoo('KBX', 'EUR') == 'KBX.DE' and guess_yahoo('IONQ', 'USD') == 'IONQ'
+    s = pac_projection(100, 2, 0.0)
+    assert list(s) == [1200.0, 2400.0]
+    assert pac_projection(100, 1, 0.05).iloc[-1] > 1200

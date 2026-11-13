@@ -67,7 +67,7 @@ def render_wants_envelope(df, rules_engine):
                      f"Restano €{s['left']:,.0f} per {s['days_left']} giorni (≈ €{s['per_day']:,.0f}/giorno)",
            'sforata': f"busta superata di **€{-s['left']:,.0f}**"}[s['state']]
     with st.container(border=True):
-        st.markdown(f"**👛 Busta desideri — {today.strftime('%m/%Y')}**: speso €{s['spent']:,.0f} "
+        st.markdown(f"**Busta desideri — {today.strftime('%m/%Y')}**: speso €{s['spent']:,.0f} "
                     f"di €{s['budget']:,.0f} · {msg}")
         pct = min(s['pct'], 1.0) * 100
         marker = min(s['expected'] / s['budget'], 1.0) * 100 if s['budget'] else 0
@@ -101,7 +101,7 @@ def render_wants_envelope(df, rules_engine):
                 b = c1.number_input("Busta €/mese", 0, 10000, int(cfg['monthly']), step=50)
                 ex = c2.multiselect("Escludi categorie", all_cats,
                                     default=[c for c in cfg['excluded'] if c in all_cats])
-                if st.form_submit_button("💾 Salva"):
+                if st.form_submit_button("Salva"):
                     rules['wants_envelope'] = {'enabled': True, 'monthly': int(b), 'excluded': ex}
                     rules_engine.save_rules(rules)
                     st.rerun()

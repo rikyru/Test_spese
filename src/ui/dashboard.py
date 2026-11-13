@@ -11,7 +11,7 @@ from src.ui.installments_panel import render_installments_panel
 from src.ui.money_overview import render_money_overview
 
 def render_dashboard(data_manager):
-    st.header("🏠 Home")
+    st.header("Home")
     re = RulesEngine()
     
     try:
@@ -31,7 +31,7 @@ def render_dashboard(data_manager):
             _cl = data_manager.get_closings()
             _last = pd.to_datetime(_cl['closing_date']).max() if not _cl.empty else None
             if _last is None or (pd.Timestamp.today() - _last).days > 35:
-                st.caption("🧾 " + (f"Ultima chiusura conti il {_last.strftime('%d/%m')}" if _last is not None
+                st.caption("" + (f"Ultima chiusura conti il {_last.strftime('%d/%m')}" if _last is not None
                                    else "Nessuna chiusura conti ancora") +
                            ": inserisci i saldi reali in **Chiusura conti** per tenere l'app allineata alla banca.")
         except Exception:
@@ -41,14 +41,14 @@ def render_dashboard(data_manager):
             _n_dq = issues_count(quality_checks(df, data_manager.get_recurring(),
                                                 re.rules.get('archived_accounts') or []))
             if _n_dq:
-                st.caption(f"🩺 {_n_dq} controlli sui dati da guardare (possono falsare saldi e analisi) "
+                st.caption(f"{_n_dq} controlli sui dati da guardare (possono falsare saldi e analisi) "
                            "→ **Impostazioni › Qualità dei dati**")
         except Exception:
             pass
 
         # 2) Spese: questo mese (busta desideri, rate), poi il periodo scelto
         st.divider()
-        st.subheader("🛒 Spese")
+        st.subheader("Spese")
         render_wants_envelope(df, re)
         render_installments_panel(data_manager)
 
@@ -123,7 +123,7 @@ def render_dashboard(data_manager):
         else:
             period_lbl = "tutto lo storico"
 
-        st.subheader(f"📋 Riepilogo {period_lbl}")
+        st.subheader(f"Riepilogo {period_lbl}")
         r1, r2, r3, r4 = st.columns(4)
         r1.metric("Speso", f"€{m_exp:,.0f}", delta=d_exp, delta_color="inverse")
         r2.metric("Entrate", f"€{m_inc:,.0f}", delta=d_inc)
@@ -139,7 +139,7 @@ def render_dashboard(data_manager):
                 pend = pend[(pd.to_datetime(pend['date']).dt.date > today) & (pend['amount'] < 0)] \
                     if not pend.empty else pend
                 if not pend.empty:
-                    st.caption(f"🔒 Ancora da pagare entro fine mese (ricorrenti/rate): "
+                    st.caption(f"Ancora da pagare entro fine mese (ricorrenti/rate): "
                                f"**€{pend['amount'].abs().sum():,.0f}** — "
                                + ", ".join(f"{r['name']} €{abs(r['amount']):,.0f}" for _, r in pend.head(6).iterrows()))
             except Exception:
@@ -158,7 +158,7 @@ def render_dashboard(data_manager):
                 budgets = re.rules.get('budgets', {})
                 if budgets:
                     over = sum(1 for c, b in budgets.items() if b and byc.get(c, 0) > b)
-                    bits.append(f"⚠️ **{over}** categorie oltre budget" if over else "✅ Budget rispettati")
+                    bits.append(f"**{over}** categorie oltre budget" if over else "Budget rispettati")
             if bits:
                 st.caption("  ·  ".join(bits))
 
@@ -185,7 +185,7 @@ def render_dashboard(data_manager):
                 fig_cal.update_yaxes(autorange='reversed', showticklabels=False)
                 fig_cal.update_layout(height=70 + len(weeks) * 60,
                                       margin=dict(l=6, r=6, t=6, b=6))
-                with st.expander("📅 Calendario spese del mese", expanded=False):
+                with st.expander("Calendario spese del mese", expanded=False):
                     st.plotly_chart(fig_cal, use_container_width=True, key="cal_heat")
                     # Drill-down per giorno (selettore affidabile: il click sulla heatmap
                     # non è supportato in modo affidabile da Streamlit)
@@ -193,7 +193,7 @@ def render_dashboard(data_manager):
                     if days_with:
                         day_opts = ["—"] + [f"{d} {month_names[selected_month]} · €{day_exp.get(d, 0):,.0f}"
                                             for d in days_with]
-                        sel_day_lbl = st.selectbox("👉 Vedi le spese di un giorno", day_opts, key="cal_day_sel")
+                        sel_day_lbl = st.selectbox("Vedi le spese di un giorno", day_opts, key="cal_day_sel")
                         if sel_day_lbl != "—":
                             dnum = int(sel_day_lbl.split()[0])
                             day_tx = filtered_df[filtered_df['date'].dt.day == dnum]
@@ -233,7 +233,7 @@ def render_dashboard(data_manager):
                     .sort_values('abs_amount', ascending=False)
                 fig_exp = px.pie(exp_by_cat, values='abs_amount', names='category', hole=0.4)
                 exp_event = st.plotly_chart(fig_exp, use_container_width=True, on_select="rerun", key="pie_expense")
-                st.caption("👆 Clicca una categoria (torta o tabella) per il dettaglio per tag.")
+                st.caption("Clicca una categoria (torta o tabella) per il dettaglio per tag.")
 
                 cat_show = exp_by_cat.copy()
                 cat_show['%'] = (cat_show['abs_amount'] / exp_total * 100).apply(lambda x: f"{x:.1f}%")
@@ -254,7 +254,7 @@ def render_dashboard(data_manager):
                 if sel_cat:
                     cat_data = expense_df[expense_df['category'] == sel_cat]
                     cat_total = cat_data['abs_amount'].sum()
-                    st.markdown(f"#### 📂 {sel_cat} — €{cat_total:,.2f} ({cat_total/exp_total*100:.0f}% del periodo)")
+                    st.markdown(f"#### {sel_cat} — €{cat_total:,.2f} ({cat_total/exp_total*100:.0f}% del periodo)")
 
                     tag_expl = cat_data.explode('tags')
                     tag_expl['tags'] = tag_expl['tags'].astype(str)
@@ -310,7 +310,7 @@ def render_dashboard(data_manager):
                               legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
             st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("📊 Andamento")
+        st.subheader("Andamento")
         if is_month:
             fl = _flows(filtered_df, filtered_df['date'].dt.date)
             if not fl.empty:
@@ -326,7 +326,7 @@ def render_dashboard(data_manager):
             if not fl.empty:
                 _flow_chart(fl, f"Mese per mese — {period_lbl}")
 
-            st.subheader("📈 Patrimonio netto nel tempo")
+            st.subheader("Patrimonio netto nel tempo")
             nw_df = df.sort_values('date').copy()
             nw_df['cumulative_balance'] = nw_df['amount'].cumsum()
             if filter_mode == "Year":
@@ -350,22 +350,22 @@ def render_dashboard(data_manager):
         budgets = re.rules.get('budgets', {})
         if budgets:
             if is_month:
-                st.subheader("🎯 Budget del mese")
+                st.subheader("Budget del mese")
                 budget_cols = st.columns(min(len(budgets), 3))
                 for idx, (cat, budget_amt) in enumerate(budgets.items()):
                     spent = expense_df[expense_df['category'] == cat]['abs_amount'].sum() if not expense_df.empty else 0.0
                     pct = min(spent / budget_amt, 1.0) if budget_amt > 0 else 0.0
-                    status = "🔴" if pct >= 0.9 else ("🟡" if pct >= 0.7 else "🟢")
+                    status = " · oltre budget" if spent > budget_amt else (" · quasi al limite" if pct >= 0.9 else "")
                     with budget_cols[idx % min(len(budgets), 3)]:
                         with st.container(border=True):
-                            st.markdown(f"{status} **{cat}**")
+                            st.markdown(f"**{cat}**{status}")
                             st.markdown(f"€{spent:,.2f} / €{budget_amt:,.2f}")
                             st.progress(pct, text=f"{pct*100:.0f}%")
             else:
-                st.caption("🎯 I budget sono mensili: per vederli scegli il periodo «Mese».")
+                st.caption("I budget sono mensili: per vederli scegli il periodo «Mese».")
             st.divider()
 
-        st.subheader("🏆 Spese più grandi del periodo")
+        st.subheader("Spese più grandi del periodo")
         if not expense_df.empty:
             top_expenses = expense_df.sort_values('abs_amount', ascending=False).head(10)
             st.dataframe(top_expenses[['date', 'description', 'category', 'tags', 'amount']]

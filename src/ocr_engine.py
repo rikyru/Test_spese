@@ -19,7 +19,13 @@ class OCREngine:
             try:
                 print("⏳ Loading EasyOCR model... (first run downloads ~100MB, may take 1-2 minutes)")
                 print("   If models are cached this will be fast.")
-                self.reader = easyocr.Reader(['it', 'en'], gpu=False, verbose=True)
+                # Modelli nella cartella dati (volume): non si riscaricano a ogni rebuild del container
+                import os
+                model_dir = os.environ.get('OCR_MODEL_DIR') or os.path.join(
+                    os.path.dirname(os.environ.get('DB_PATH', 'finance_data/finance.duckdb')) or '.', 'ocr_models')
+                os.makedirs(model_dir, exist_ok=True)
+                self.reader = easyocr.Reader(['it', 'en'], gpu=False, verbose=True,
+                                             model_storage_directory=model_dir)
                 print("✅ EasyOCR model loaded successfully!")
             except Exception as e:
                 raise RuntimeError(

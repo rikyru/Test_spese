@@ -55,13 +55,24 @@ def render_account_closing(dm):
         with col:
             with st.container(border=True):
                 st.markdown(f"**{acc}**" + (" ⭐" if acc == main else ""))
+                live = None
+                if acc in cfg['investments'] and len(subs) == 1:
+                    try:
+                        from src.investments import live_portfolio
+                        pf, _ = live_portfolio(dm, acc)
+                        live = round(float(pf['value_now'].sum()), 2) if not pf.empty else None
+                    except Exception:
+                        live = None
                 for sub in subs:
                     neg = sub in cfg['negative']
-                    v = st.number_input(sub + (" (−)" if neg else ""), value=float(last_details.get(sub, 0.0)),
+                    default = live if live is not None else float(last_details.get(sub, 0.0))
+                    v = st.number_input(sub + (" (−)" if neg else ""), value=default,
                                         step=10.0, format="%.2f", key=f"cl_{acc}_{sub}",
                                         help=("Spese con carta di credito già registrate nell'app ma non ancora "
                                               "addebitate sul conto: vengono sottratte." if neg else None))
                     details[sub] = v
+                if live is not None:
+                    st.caption("Proposto dal portafoglio a prezzi di oggi (pagina Investimenti).")
                 tot = group_real(subs, details, cfg['negative'])
                 real[acc] = tot
                 st.caption(f"Reale €{tot:,.2f} · app €{app_bal.get(acc, 0.0):,.2f}")
