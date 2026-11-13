@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
 from src.data_manager import advance_date
-from src.ui.analysis import real_income, real_expenses, in_progress_period, drop_in_progress
+from src.metrics import real_income, real_expenses, in_progress_period, drop_in_progress
 from tests.test_data_manager import dm as _dm_fixture, insert_transaction  # noqa: F401
 
 
@@ -173,7 +173,7 @@ class TestRecurring:
 
 
 # --- Media mensile standard ---
-from src.ui.analysis import monthly_totals, avg_monthly
+from src.metrics import monthly_totals, avg_monthly
 
 
 def _tx(rows):
@@ -245,7 +245,7 @@ class TestMyShareView:
 
 
 # --- Solo stipendio ---
-from src.ui.analysis import salary_coverage
+from src.metrics import salary_coverage
 
 
 class TestSalaryCoverage:
@@ -270,7 +270,7 @@ class TestSalaryCoverage:
 
 
 # --- Confronti e previsioni affidabili ---
-from src.ui.analysis import comparable_prev_month, spending_forecast, thirteenth_estimate
+from src.metrics import comparable_prev_month, spending_forecast, thirteenth_estimate
 
 
 class TestComparablePrevMonth:
@@ -311,7 +311,7 @@ def test_thirteenth_estimate(dm):
     assert thirteenth_estimate(dm) == 2113.0
 
 
-from src.ui.analysis import typical_income, category_overview
+from src.metrics import typical_income, category_overview
 
 
 def test_typical_income_is_median_of_12_complete_months():

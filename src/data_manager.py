@@ -726,6 +726,22 @@ class DataManager:
             rec_df = self.get_recurring()
             if not rec_df.empty:
                 z.writestr('recurring_rules.csv', rec_df.to_csv(index=False))
+
+            # Dati non-movimento (in meta/: ingest_zip li ignora): buste paga,
+            # spese in programma, regole/configurazione
+            for name, query in [('payslips', "SELECT * FROM payslips"),
+                                ('planned_expenses', "SELECT * FROM planned_expenses")]:
+                try:
+                    t = self.con.execute(query).df()
+                    if not t.empty:
+                        z.writestr(f'meta/{name}.csv', t.to_csv(index=False))
+                except Exception:
+                    pass
+            try:
+                import yaml
+                z.writestr('meta/rules.yaml', yaml.safe_dump(self.rules_engine.rules, allow_unicode=True))
+            except Exception:
+                pass
                 
         return zip_buffer.getvalue()
 
@@ -743,6 +759,9 @@ class DataManager:
                 count = 0
                 skipped = 0
                 for filename in z.namelist():
+                    # Solo CSV di movimenti: salta regole ricorrenti e meta/ (buste, config)
+                    if filename == 'recurring_rules.csv' or filename.startswith('meta/'):
+                        continue
                     if filename.endswith('.csv'):
                         # Check if already imported
                         if filename in existing_files:

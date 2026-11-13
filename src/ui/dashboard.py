@@ -2,15 +2,14 @@ import streamlit as st
 import plotly.express as px
 import pandas as pd
 import plotly.graph_objects as go
-from src.data_manager import DataManager
 import datetime
 import calendar
-from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
-from src.ui.analysis import (real_income, real_expenses, in_progress_period, avg_monthly, AVG_BASIS_NOTE,
+from src.metrics import (real_income, real_expenses, avg_monthly, AVG_BASIS_NOTE,
                              comparable_prev_month)
 from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
 from src.ui.wants_envelope import render_wants_envelope
+from src.ui.installments_panel import render_installments_panel
 
 def render_dashboard(data_manager):
     st.header("Dashboard")
@@ -33,6 +32,15 @@ def render_dashboard(data_manager):
 
         # Busta desideri del mese corrente (indipendente dai filtri)
         render_wants_envelope(df, re)
+        render_installments_panel(data_manager)
+        try:
+            from src.ui.data_quality import quality_checks, issues_count
+            _n_dq = issues_count(quality_checks(df, data_manager.get_recurring()))
+            if _n_dq:
+                st.caption(f"🩺 {_n_dq} controlli sui dati da guardare (possono falsare saldi e analisi) "
+                           "→ **Impostazioni › Qualità dei dati**")
+        except Exception:
+            pass
 
         # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
         min_date = df['date'].min().date()

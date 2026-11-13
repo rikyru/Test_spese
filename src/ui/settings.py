@@ -6,6 +6,10 @@ from src.data_manager import DataManager
 def render_settings(data_manager: DataManager):
     import pandas as pd
     st.header("⚙️ Impostazioni e regole")
+
+    from src.ui.data_quality import render_data_quality
+    render_data_quality(data_manager)
+    st.divider()
     
     # --- Initial Balance ---
     st.subheader("💰 Saldo iniziale")

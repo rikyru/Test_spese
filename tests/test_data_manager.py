@@ -240,3 +240,22 @@ class TestGetSummary:
     def test_summary_empty_db(self, dm):
         df = dm.get_summary()
         assert df.empty
+
+
+def test_backup_zip_includes_meta_and_import_skips_it(dm, tmp_path):
+    import zipfile, io
+    insert_transaction(dm, datetime.date(2025, 1, 15), -50.0, 'Spesa', type_='Expense')
+    dm.add_recurring('Netflix', -10.0, 'Svago', 'Conto', 'Monthly', datetime.date(2025, 2, 1), '', ['netflix'])
+    dm.save_payslip({'year': 2025, 'month': 1, 'kind': 'mensile', 'netto': 2000.0}, 'x.pdf')
+    dm.rules_engine.rules = {'budgets': {'Svago': 50}}
+    data = dm.export_backup_zip()
+    names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+    assert 'meta/payslips.csv' in names and 'meta/rules.yaml' in names and 'recurring_rules.csv' in names
+    p = tmp_path / 'b.zip'
+    p.write_bytes(data)
+    for fn in ('apply_rules', 'apply_history_rules', 'auto_tag_from_description'):
+        getattr(dm.rules_engine, fn).side_effect = lambda df, **k: df
+    dm.con.execute("DELETE FROM transactions")
+    ok, _ = dm.ingest_zip(str(p))
+    assert ok
+    assert len(dm.get_transactions()) == 1      # niente movimenti finti da ricorrenti/meta

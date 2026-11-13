@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from src.partner_share import my_share_view
-from src.ui.analysis import real_expenses
+from src.metrics import real_expenses
 
 DEFAULT_ENVELOPE = {'enabled': True, 'monthly': 600, 'excluded': ['Viaggi', 'Regali']}
 
