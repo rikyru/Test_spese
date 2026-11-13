@@ -5,19 +5,14 @@ import plotly.graph_objects as go
 import datetime
 import calendar
 from src.rules_engine import RulesEngine
-from src.metrics import (real_income, real_expenses, avg_monthly, AVG_BASIS_NOTE,
-                             comparable_prev_month)
-from src.utils import VIRTUAL_ACCOUNTS, INVESTMENT_ACCOUNTS, liquid_balance
+from src.metrics import real_income, real_expenses, comparable_prev_month
 from src.ui.wants_envelope import render_wants_envelope
 from src.ui.installments_panel import render_installments_panel
+from src.ui.money_overview import render_money_overview
 
 def render_dashboard(data_manager):
-    st.header("Dashboard")
-    
-    # Load rules for icons
+    st.header("🏠 Home")
     re = RulesEngine()
-    wallet_rules = re.rules.get('wallets', {})
-    main_wallet = data_manager.get_main_wallet()
     
     try:
         df = data_manager.get_transactions()
@@ -30,9 +25,8 @@ def render_dashboard(data_manager):
         df['year'] = df['date'].dt.year
         df['month'] = df['date'].dt.month
 
-        # Busta desideri del mese corrente (indipendente dai filtri)
-        render_wants_envelope(df, re)
-        render_installments_panel(data_manager)
+        # 1) Quanti soldi hai e dove
+        render_money_overview(df, data_manager, re)
         try:
             _cl = data_manager.get_closings()
             _last = pd.to_datetime(_cl['closing_date']).max() if not _cl.empty else None
@@ -51,6 +45,12 @@ def render_dashboard(data_manager):
                            "→ **Impostazioni › Qualità dei dati**")
         except Exception:
             pass
+
+        # 2) Spese: questo mese (busta desideri, rate), poi il periodo scelto
+        st.divider()
+        st.subheader("🛒 Spese")
+        render_wants_envelope(df, re)
+        render_installments_panel(data_manager)
 
         # Filtri periodo — barra compatta in alto (spostati dalla sidebar)
         min_date = df['date'].min().date()
@@ -201,154 +201,6 @@ def render_dashboard(data_manager):
                                         f"€{day_exp.get(dnum, 0):,.2f}")
                             st.dataframe(day_tx[['date', 'description', 'category', 'amount', 'tags']]
                                          .sort_values('date'), hide_index=True, use_container_width=True)
-
-        # --- 0. Liquidity Overview (New) ---
-        st.divider()
-        st.subheader("💳 Conti e liquidità")
-        
-        # We must operate on the FULL dataset for liquidity (cumulative balance)
-        full_df = df # df is already full get_transactions() result
-        
-
-        if not full_df.empty:
-            # Calculate balance per account
-            all_balances = full_df.groupby('account')['amount'].sum().reset_index()
-            # Conti virtuali (Partner, Prestiti) = crediti/debiti, NON liquidità spendibile
-            virtual_bal = all_balances[all_balances['account'].isin(VIRTUAL_ACCOUNTS)]
-            archived = set(re.rules.get('archived_accounts') or [])
-            balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS | INVESTMENT_ACCOUNTS | archived)]                 .reset_index(drop=True)
-            # Addebiti ricorrenti mensili per conto (es. mutuo su MPS): quanti ne copre il saldo
-            rec_month = {}
-            try:
-                _rec = data_manager.get_recurring()
-                _f = {'Monthly': 1.0, 'Bimonthly': 0.5, 'Quarterly': 1 / 3, 'Yearly': 1 / 12, 'Weekly': 4.33}
-                for _, _r in _rec.iterrows():
-                    rec_month[_r['account']] = rec_month.get(_r['account'], 0.0) +                         abs(_r['amount']) * _f.get(_r['frequency'], 1.0)
-            except Exception:
-                pass
-            total_liquidity = liquid_balance(full_df)
-
-            # --- Total Liquidity Big Card ---
-            st.markdown(f"""
-            <div style="padding: 20px; border-radius: 10px; background: linear-gradient(90deg, #4CAF50 0%, #2E7D32 100%); color: white; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                <h3 style="margin:0; font-size: 1.2rem; opacity: 0.9;">Liquidità disponibile</h3>
-                <h1 style="margin:0; font-size: 2.5rem;">€ {total_liquidity:,.2f}</h1>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # --- Investimenti: valore attuale vs soldi versati (trasferimenti netti) ---
-            for inv in sorted(INVESTMENT_ACCOUNTS):
-                inv_rows = full_df[full_df['account'] == inv]
-                if inv_rows.empty:
-                    continue
-                value = float(inv_rows['amount'].sum())
-                paid_in = float(inv_rows[inv_rows['type'].isin(['Incoming Transfer', 'Outgoing Transfer'])]['amount'].sum())
-                gain = value - paid_in
-                pct = gain / paid_in * 100 if paid_in else 0.0
-                st.metric(f"📈 {inv}", f"€{value:,.2f}",
-                          delta=f"{gain:+,.2f}€ ({pct:+.1f}%) su €{paid_in:,.0f} investiti",
-                          help="Valore aggiornato a ogni chiusura conti. Nel patrimonio, non nella liquidità "
-                               "disponibile. Se investi altri soldi registra il trasferimento verso questo conto.")
-
-            # --- Crediti (prestiti aperti, non spendibili) ---
-            # Il saldo del conto 'Partner' NON è mostrato: le compensazioni col
-            # partner passano sui conti reali, quindi non sarebbe un dovuto vero.
-            # Il saldo col partner si legge in Spese Condivise.
-            loans_open = virtual_bal.loc[virtual_bal['account'] == 'Prestiti', 'amount'].sum()
-            if 'source_file' in full_df.columns:
-                loans_open += full_df.loc[(full_df['account'] == 'Partner')
-                                          & full_df['source_file'].isin(['loan', 'loan_repay']),
-                                          'amount'].sum()
-            if abs(loans_open) > 0.005:
-                st.metric("💸 Prestiti da ricevere", f"€{loans_open:,.2f}",
-                          help="Soldi prestati (anche al partner) non ancora restituiti. "
-                               "Non conteggiati nella liquidità. Il saldo spese col partner è in Spese Condivise.")
-
-            # --- Wallet Grid ---
-            if not balances.empty:
-                st.write("##### Conti")
-
-                # Main wallet first, then by balance descending
-                balances['_is_main'] = balances['account'] == main_wallet
-                balances = balances.sort_values(
-                    ['_is_main', 'amount'], ascending=[False, False]
-                ).reset_index(drop=True)
-
-                # Helper for icons
-                def get_icon(name):
-                    # Check custom rule first
-                    if name in wallet_rules and 'icon' in wallet_rules[name]:
-                        return wallet_rules[name]['icon']
-                        
-                    name = name.lower()
-                    if any(x in name for x in ['contanti', 'cash', 'tasca']): return "💵"
-                    if any(x in name for x in ['banca', 'bank', 'unicredit', 'intesa', 'bnl', 'posta', 'conto']): return "🏦"
-                    if any(x in name for x in ['revolut', 'paypal', 'satispay', 'visa', 'mastercard', 'amex']): return "💳"
-                    if any(x in name for x in ['risparmi', 'fondo', 'deposito', 'salvadanaio']): return "🐷"
-                    if any(x in name for x in ['invest', 'trade', 'crypto', 'bitcoin']): return "📈"
-                    return "👛"
-
-                # Create rows of 3
-                cols = st.columns(3)
-                for i, row in balances.iterrows():
-                    acc_name = row['account']
-                    bal = row['amount']
-                    icon = get_icon(acc_name)
-                    
-                    # Determine color for amount
-                    color = "#2E7D32" if bal >= 0 else "#C62828"
-                    
-                    is_main = acc_name == main_wallet
-
-                    with cols[i % 3]:
-                        with st.container(border=True):
-                            title = f"**{icon} {acc_name}**"
-                            if is_main:
-                                title += " &nbsp;<span style='background:#FFF3E0;color:#E65100;border-radius:4px;padding:1px 6px;font-size:0.7em;font-weight:700;'>⭐ PRINCIPALE</span>"
-                            st.markdown(title, unsafe_allow_html=True)
-                            st.markdown(f"<h3 style='margin:0; color: {color};'>€ {bal:,.2f}</h3>", unsafe_allow_html=True)
-                            # Conti usati solo per addebiti (mutuo): quanti mesi coprono ancora
-                            if not is_main and rec_month.get(acc_name, 0) >= 50:
-                                n_cov = bal / rec_month[acc_name]
-                                st.caption(("⚠️ " if n_cov < 2 else "") +
-                                           f"Copre ~{max(n_cov, 0):.1f} mesi di addebiti ricorrenti "
-                                           f"(€{rec_month[acc_name]:,.0f}/mese)")
-
-            # --- 🛟 Fondo Emergenza ---
-            if not real_expenses(full_df).empty:
-                # Stessa base di Analisi > Salute: media ultimi 12 mesi completi
-                avg_exp = avg_monthly(full_df)
-                typ_save = avg_monthly(full_df, 'income') - avg_exp
-
-                target_months = int(re.rules.get('emergency_target_months', 6) or 6)
-                target_amt = target_months * avg_exp
-                runway = (total_liquidity / avg_exp) if avg_exp > 0 else 0
-
-                st.markdown("##### 🛟 Fondo Emergenza")
-                ef1, ef2, ef3, ef4 = st.columns([1, 1, 1, 1.4])
-                ef1.metric("Liquidità", f"€{total_liquidity:,.0f}")
-                ef2.metric("Copre", f"{runway:.1f} mesi", help=f"Liquidità / spesa media mensile €{avg_exp:,.0f}. {AVG_BASIS_NOTE}.")
-                ef3.metric(f"Obiettivo ({target_months}m)", f"€{target_amt:,.0f}")
-                new_tm = ef4.slider("Mesi obiettivo", 1, 12, target_months, key="ef_target")
-                if new_tm != target_months:
-                    r = re.rules
-                    r['emergency_target_months'] = int(new_tm)
-                    re.save_rules(r)
-                    st.rerun()
-
-                if target_amt > 0:
-                    pct = min(total_liquidity / target_amt, 1.0)
-                    st.progress(pct, text=f"{pct * 100:.0f}% dell'obiettivo ({target_months} mesi di spese)")
-                    if total_liquidity >= target_amt:
-                        st.success(f"🎉 Fondo emergenza completo: copri {runway:.1f} mesi.")
-                    else:
-                        manca = target_amt - total_liquidity
-                        if typ_save > 0:
-                            st.info(f"Mancano **€{manca:,.0f}**. Risparmiando ~€{typ_save:,.0f}/mese (media 12m) "
-                                    f"ci arrivi in ~**{manca / typ_save:.0f} mesi**.")
-                        else:
-                            st.warning(f"Mancano **€{manca:,.0f}**. Col risparmio mensile attuale (≤ 0) l'obiettivo "
-                                       "non avanza: la priorità è chiudere i mesi in positivo.")
 
         # --- Grafici (entrate/spese REALI: niente trasferimenti tra conti) ---
         income_df = real_income(filtered_df)
