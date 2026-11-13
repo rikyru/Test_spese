@@ -226,7 +226,8 @@ def _learn(dm, pf):
     monthly = c1.number_input("Versamento mensile €", 0, 5000, 100, step=25, key='pac_m')
     years = c2.slider("Anni", 1, 30, 10, key='pac_y')
     initial = c3.number_input("Capitale iniziale €", 0, 500000, 0, step=500, key='pac_i')
-    savings_rate = float(rules.get('savings_rate_pct', 2.5))
+    from src.utils import savings_accounts
+    savings_rate = float(next(iter(savings_accounts(rules).values()), {'rate': 2.5})['rate'])
     scen = {f"Conto risparmio {savings_rate:.1f}%": savings_rate / 100,
             "Obbligazionario ~3%": 0.03, "Bilanciato ~5%": 0.05, "Azionario globale ~7%": 0.07}
     fig = go.Figure()

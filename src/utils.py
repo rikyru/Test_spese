@@ -20,6 +20,22 @@ VIRTUAL_ACCOUNTS = {'Partner', 'Prestiti'}
 INVESTMENT_ACCOUNTS = {'Investimenti Revolut'}
 INVESTMENT_CATEGORY = 'Variazione investimenti'
 
+# Conti RISPARMIO con interessi: tasso annuo lordo % e tassazione % sugli interessi
+DEFAULT_SAVINGS_ACCOUNTS = {'Risparmi Revolut': {'rate': 2.5, 'tax': 26.0}}
+INTEREST_CATEGORY = 'Interessi'
+
+
+def savings_accounts(rules):
+    return rules.get('savings_accounts') or DEFAULT_SAVINGS_ACCOUNTS
+
+
+def accrued_interest(balance, rate_pct, tax_pct, days):
+    """Interessi netti maturati su `balance` in `days` giorni (capitalizzazione giornaliera)."""
+    if balance <= 0 or days <= 0:
+        return 0.0
+    gross = balance * ((1 + rate_pct / 100) ** (days / 365) - 1)
+    return gross * (1 - tax_pct / 100)
+
 
 def liquid_balance(df):
     """Liquidità spendibile: somma dei saldi esclusi conti virtuali e investimenti."""

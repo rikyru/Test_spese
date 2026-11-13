@@ -11,6 +11,8 @@ from src.account_closing import closing_config, plan_closing, apply_closing, gro
 def _describe(op):
     if op['kind'] == 'transfer':
         return f"🔁 Trasferimento €{op['amount']:,.2f}: {op['from']} → {op['to']} (neutro per le analisi)"
+    if op['kind'] == 'interest':
+        return f"Interessi €{op['amount']:,.2f} su {op['account']} (entrata)"
     if op['kind'] == 'valuation':
         return (f"📈 Variazione di valore {op['account']} €{op['amount']:+,.2f} "
                 "(andamento di mercato: neutra, non è spesa né entrata)")
@@ -89,7 +91,16 @@ def render_account_closing(dm):
 
     first_adj = st.checkbox("Prima chiusura: registra la differenza totale come aggiustamento neutro "
                             "(non conta come spesa del mese)", value=first, key='cl_first')
-    ops = plan_closing(app_bal, real, main, first=first_adj, investments=cfg['investments'])
+    # Interessi attesi sui conti risparmio dall'ultimo movimento registrato
+    from src.utils import savings_accounts, accrued_interest
+    expected = {}
+    for a, s in savings_accounts(rules).items():
+        rows = upto[upto['account'] == a]
+        if a in groups and not rows.empty:
+            days = (pd.Timestamp(c_date) - rows['date'].max()).days
+            expected[a] = accrued_interest(app_bal.get(a, 0.0), s['rate'], s['tax'], days)
+    ops = plan_closing(app_bal, real, main, first=first_adj, investments=cfg['investments'],
+                       expected_interest=expected)
     if not ops:
         st.success("I saldi coincidono: niente da registrare.")
     else:
@@ -104,8 +115,31 @@ def render_account_closing(dm):
         st.success(f"Chiusura registrata ({len(ops)} movimenti).")
         st.rerun()
 
+    _savings_settings(dm)
     _archive_section(dm, groups, main)
     _history(closings)
+
+
+def _savings_settings(dm):
+    """Tasso e tassazione dei conti risparmio (per stimare gli interessi maturati)."""
+    from src.utils import savings_accounts
+    rules = dm.rules_engine.rules
+    sav = {a: dict(v) for a, v in savings_accounts(rules).items()}
+    with st.expander("Conti risparmio: tasso e tasse sugli interessi"):
+        st.caption("Servono a stimare gli interessi maturati (in Home) e a riconoscerli in chiusura. Se gli "
+                   "interessi che Revolut accredita sono già netti, la tassazione è già applicata: confronta "
+                   "la stima con l'accredito reale e correggi.")
+        with st.form("sav_cfg"):
+            for a, v in sav.items():
+                c1, c2 = st.columns(2)
+                v['rate'] = c1.number_input(f"{a}: tasso annuo lordo %", 0.0, 20.0, float(v['rate']), step=0.05,
+                                            key=f"sav_r_{a}")
+                v['tax'] = c2.number_input(f"{a}: tasse sugli interessi %", 0.0, 50.0, float(v['tax']), step=1.0,
+                                           key=f"sav_t_{a}")
+            if st.form_submit_button("Salva"):
+                rules['savings_accounts'] = sav
+                dm.rules_engine.save_rules(rules)
+                st.rerun()
 
 
 def _archive_section(dm, groups, main):

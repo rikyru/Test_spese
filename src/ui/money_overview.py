@@ -2,7 +2,7 @@
 import datetime
 import pandas as pd
 import streamlit as st
-from src.utils import VIRTUAL_ACCOUNTS, INVESTMENT_ACCOUNTS, liquid_balance
+from src.utils import VIRTUAL_ACCOUNTS, INVESTMENT_ACCOUNTS, liquid_balance, savings_accounts, accrued_interest
 from src.metrics import avg_monthly, AVG_BASIS_NOTE
 
 FREQ_PER_MONTH = {'Monthly': 1.0, 'Bimonthly': 0.5, 'Quarterly': 1 / 3, 'Yearly': 1 / 12, 'Weekly': 4.33}
@@ -50,6 +50,15 @@ def render_money_overview(df, data_manager, rules_engine):
     bal = now_df.groupby('account')['amount'].sum()
     future = df[df['date'] > today]
     liquid = liquid_balance(now_df)
+    # Interessi maturati sui conti risparmio dall'ultimo movimento registrato (stima)
+    accrued = {}
+    for a, s in savings_accounts(rules).items():
+        rows = now_df[now_df['account'] == a]
+        if not rows.empty:
+            days = (today - rows['date'].max()).days
+            accrued[a] = (accrued_interest(float(rows['amount'].sum()), s['rate'], s['tax'], days),
+                          rows['date'].max(), s)
+    liquid += sum(v for v, _, _ in accrued.values())
     inv = _investment_values(data_manager, now_df)
     invested = sum(v for v, _, _ in inv.values())
     total = liquid + invested
@@ -80,11 +89,16 @@ def render_money_overview(df, data_manager, rules_engine):
             tag = "principale"
             pend = future[future['account'] == a]['amount'].sum()
             sub = "Spese di tutti i giorni" + (f" · in uscita €{-pend:,.0f} (bollette future)" if pend < 0 else "")
+        elif a in accrued:
+            acc_v, since, s = accrued[a]
+            sub = (f"Tasso {s['rate']:.2f}% lordo · +€{acc_v:,.2f} interessi maturati dal "
+                   f"{since.strftime('%d/%m')} (stima, netti {100 - s['tax']:.0f}%)")
         elif rec_month.get(a, 0) >= 50:
             n = bal[a] / rec_month[a]
             sub = f"Copre ~{max(n, 0):.1f} mesi di addebiti (€{rec_month[a]:,.0f}/mese)" + \
                   (" — da ricaricare" if n < 2 else "")
-        cards.append(dict(title=a, value=float(bal[a]), sub=sub, tag=tag))
+        value = float(bal[a]) + (accrued[a][0] if a in accrued else 0.0)
+        cards.append(dict(title=a, value=value, sub=sub, tag=tag))
     for a, (value, paid_in, live) in inv.items():
         gain = value - paid_in
         pct = gain / paid_in * 100 if paid_in else 0.0
