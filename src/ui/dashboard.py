@@ -7,7 +7,8 @@ import datetime
 import calendar
 from src.ui.styling import get_chart_colors
 from src.rules_engine import RulesEngine
-from src.ui.analysis import real_income, real_expenses, in_progress_period, avg_monthly, AVG_BASIS_NOTE
+from src.ui.analysis import (real_income, real_expenses, in_progress_period, avg_monthly, AVG_BASIS_NOTE,
+                             comparable_prev_month)
 from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
 from src.ui.wants_envelope import render_wants_envelope
 
@@ -83,17 +84,18 @@ def render_dashboard(data_manager):
             m_net = m_inc - m_exp
             m_rate = (m_net / m_inc * 100) if m_inc > 0 else 0
 
-            # Mese precedente (per il delta)
-            pm = selected_month - 1 if selected_month > 1 else 12
-            py = selected_year if selected_month > 1 else selected_year - 1
-            p_exp = real_expenses(df[(df['year'] == py) & (df['month'] == pm)])['amount'].abs().sum()
+            # Mese precedente confrontabile (stessi giorni se il mese è in corso)
+            p_df, p_lbl = comparable_prev_month(df, selected_year, selected_month)
+            if account_filter:
+                p_df = p_df[p_df['account'].isin(account_filter)]
+            p_exp = real_expenses(p_df)['amount'].abs().sum()
             delta_exp = m_exp - p_exp
 
             month_lbl = f"{month_names[selected_month]} {selected_year}"
             st.subheader(f"📋 Riepilogo {month_lbl}")
             r1, r2, r3, r4 = st.columns(4)
             r1.metric("Speso", f"€{m_exp:,.0f}",
-                      delta=(f"{delta_exp:+,.0f}€ vs mese prec." if p_exp > 0 else None),
+                      delta=(f"{delta_exp:+,.0f}€ {p_lbl}" if p_exp > 0 else None),
                       delta_color="inverse")
             r2.metric("Entrate", f"€{m_inc:,.0f}")
             r3.metric("Risparmio", f"€{m_net:,.0f}")
@@ -276,8 +278,9 @@ def render_dashboard(data_manager):
 
         # --- Metrics ---
         st.divider()
-        total_income = filtered_df[filtered_df['type'] == 'Income']['amount'].sum()
-        total_expense = filtered_df[filtered_df['type'] == 'Expense']['amount'].sum()
+        # Entrate/spese REALI (senza trasferimenti, saldo iniziale, aggiustamenti)
+        total_income = real_income(filtered_df)['amount'].sum()
+        total_expense = real_expenses(filtered_df)['amount'].sum()
         balance = total_income + total_expense
         savings_rate = (balance / total_income * 100) if total_income > 0 else 0
 
@@ -341,27 +344,25 @@ def render_dashboard(data_manager):
         delta_expense = None
         delta_balance = None
         if filter_mode == "Month" and selected_year is not None and selected_month is not None:
-            prev_m = selected_month - 1 if selected_month > 1 else 12
-            prev_y = selected_year if selected_month > 1 else selected_year - 1
-            prev_df = df[(df['year'] == prev_y) & (df['month'] == prev_m)]
+            prev_df, p_lbl = comparable_prev_month(df, selected_year, selected_month)
             if account_filter:
                 prev_df = prev_df[prev_df['account'].isin(account_filter)]
-            prev_income = prev_df[prev_df['type'] == 'Income']['amount'].sum()
-            prev_expense = prev_df[prev_df['type'] == 'Expense']['amount'].sum()
+            prev_income = real_income(prev_df)['amount'].sum()
+            prev_expense = real_expenses(prev_df)['amount'].sum()
             prev_balance = prev_income + prev_expense
             if prev_income != 0:
                 diff_inc = total_income - prev_income
                 sign = '+' if diff_inc >= 0 else '-'
-                delta_income = f"{sign}€{abs(diff_inc):,.2f} vs mese prec."
+                delta_income = f"{sign}€{abs(diff_inc):,.2f} {p_lbl}"
             if prev_expense != 0:
                 # Use absolute values: positive = spent more (bad), negative = spent less (good)
                 diff_exp = abs(total_expense) - abs(prev_expense)
                 sign = '+' if diff_exp >= 0 else '-'
-                delta_expense = f"{sign}€{abs(diff_exp):,.2f} vs mese prec."
+                delta_expense = f"{sign}€{abs(diff_exp):,.2f} {p_lbl}"
             if prev_balance != 0:
                 diff_bal = balance - prev_balance
                 sign = '+' if diff_bal >= 0 else '-'
-                delta_balance = f"{sign}€{abs(diff_bal):,.2f} vs mese prec."
+                delta_balance = f"{sign}€{abs(diff_bal):,.2f} {p_lbl}"
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Income", f"€{total_income:,.2f}", delta=delta_income)

@@ -267,3 +267,45 @@ class TestSalaryCoverage:
     def test_no_salary(self):
         df = _tx([('2020-01-10', -10.0, 'X', 'Expense', [])])
         assert salary_coverage(df, SPLIT_CONF)['stipendio'].sum() == 0
+
+
+# --- Confronti e previsioni affidabili ---
+from src.ui.analysis import comparable_prev_month, spending_forecast, thirteenth_estimate
+
+
+class TestComparablePrevMonth:
+    DF = pd.DataFrame({'date': pd.to_datetime(['2026-10-05', '2026-10-20', '2026-11-03']),
+                       'amount': [-10.0, -20.0, -5.0]})
+
+    def test_in_progress_month_truncated_to_same_day(self):
+        prev, lbl = comparable_prev_month(self.DF, 2026, 11, today='2026-11-13')
+        assert prev['amount'].tolist() == [-10.0] and lbl == 'vs 1–13 ott'
+
+    def test_closed_month_full(self):
+        prev, lbl = comparable_prev_month(self.DF, 2026, 11, today='2026-12-02')
+        assert len(prev) == 2 and lbl == 'vs ott'
+
+    def test_january_wraps_to_december(self):
+        df = pd.DataFrame({'date': pd.to_datetime(['2025-12-10']), 'amount': [-1.0]})
+        prev, _ = comparable_prev_month(df, 2026, 1, today='2026-03-01')
+        assert len(prev) == 1
+
+
+class TestSpendingForecast:
+    def test_mean_range_and_backtest(self):
+        idx = pd.period_range('2024-01', periods=24, freq='M')
+        s = pd.Series([1000.0] * 12 + [2000.0] * 12, index=idx)
+        fc = spending_forecast(s, window=12, backtest_months=6)
+        assert fc['expected'] == 2000.0 and fc['low'] == 2000.0 and fc['high'] == 2000.0
+        # backtest: la finestra contiene ancora mesi a 1000 → errori 500, 417, …, 83
+        assert fc['mae'] == pytest.approx(291.67, abs=0.01)
+        assert fc['trend_pct'] == pytest.approx(100.0)
+
+    def test_too_short(self):
+        assert spending_forecast(pd.Series([1.0, 2.0])) is None
+
+
+def test_thirteenth_estimate(dm):
+    assert thirteenth_estimate(dm) == 0.0
+    dm.save_payslip({'year': 2025, 'month': 12, 'kind': 'tredicesima', 'netto': 2113.0}, 'x.pdf')
+    assert thirteenth_estimate(dm) == 2113.0
