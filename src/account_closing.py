@@ -8,29 +8,49 @@ interni non registrati) diventa trasferimenti dal/al conto principale, neutri
 per le analisi. Lo storico non viene modificato: si aggiungono solo movimenti
 con la data della chiusura.
 """
+from src.utils import INVESTMENT_ACCOUNTS, INVESTMENT_CATEGORY
+
 UNTRACKED_CATEGORY = 'Non registrate'
 CLOSING_DESC = 'Chiusura conti'
 
 DEFAULT_GROUPS = {
     'Conto BNL': ['Conto MPS'],
-    'Portafoglio - (Unicredit e Revolut)': ['Unicredit', 'Revolut corrente', 'Satispay', 'Contanti'],
-    'Risparmi Revolut': ['Revolut salvadanaio', 'Revolut investito'],
+    'Portafoglio - (Unicredit e Revolut)': ['Unicredit', 'Revolut corrente', 'Satispay', 'Contanti',
+                                            'Carta di credito da addebitare'],
+    'Risparmi Revolut': ['Revolut salvadanaio'],
+    'Investimenti Revolut': ['Revolut investito'],
 }
+# Sottoconti da SOTTRARRE (es. spese con carta di credito già registrate nell'app
+# ma non ancora addebitate sul conto corrente)
+NEGATIVE_SUBS = {'Carta di credito da addebitare'}
 
 
 def closing_config(rules):
     cfg = rules.get('closing_accounts') or {}
     groups = cfg.get('groups') or DEFAULT_GROUPS
-    return {'groups': groups, 'main': cfg.get('main')}
+    return {'groups': groups, 'main': cfg.get('main'),
+            'negative': set(cfg.get('negative_subs') or NEGATIVE_SUBS),
+            'investments': set(cfg.get('investments') or INVESTMENT_ACCOUNTS)}
 
 
-def plan_closing(app_bal, real_bal, main, first=False, tol=0.01):
+def group_real(subs, values, negative):
+    """Saldo reale di un conto dell'app dai suoi sottoconti (negativi sottratti)."""
+    return round(sum(-abs(values.get(s, 0.0)) if s in negative else values.get(s, 0.0) for s in subs), 2)
+
+
+def plan_closing(app_bal, real_bal, main, first=False, tol=0.01, investments=()):
     """Operazioni per portare ogni conto al saldo reale.
     app_bal/real_bal: conto → saldo. Ritorna lista di dict:
+      {'kind': 'valuation', 'account', 'amount'}  variazione di valore di un investimento
       {'kind': 'untracked'|'adjustment', 'account', 'amount'}  (amount con segno)
       {'kind': 'transfer', 'from', 'to', 'amount'}             (amount > 0)"""
     ops = []
-    accounts = list(real_bal)
+    # Investimenti: la differenza è variazione di mercato, non denaro sfuggito
+    for a in [a for a in real_bal if a in investments]:
+        d = round(real_bal[a] - app_bal.get(a, 0.0), 2)
+        if abs(d) >= tol:
+            ops.append({'kind': 'valuation', 'account': a, 'amount': d})
+    accounts = [a for a in real_bal if a not in investments]
     gap = round(sum(real_bal[a] for a in accounts) - sum(app_bal.get(a, 0.0) for a in accounts), 2)
     after = {a: app_bal.get(a, 0.0) for a in accounts}
     if abs(gap) >= tol:
@@ -58,7 +78,9 @@ def apply_closing(dm, ops, date):
                             tag='chiusura', source='closing')
             continue
         amt = op['amount']
-        if op['kind'] == 'adjustment':
+        if op['kind'] == 'valuation':
+            typ, cat, nec, desc = 'Adjustment', INVESTMENT_CATEGORY, None, f"{CLOSING_DESC}: variazione di valore"
+        elif op['kind'] == 'adjustment':
             typ, cat, nec, desc = 'Adjustment', 'Adjustment', None, f"{CLOSING_DESC}: allineamento iniziale"
         elif amt < 0:
             typ, cat, nec, desc = 'Expense', UNTRACKED_CATEGORY, 'Want', f"{CLOSING_DESC}: spese non registrate"

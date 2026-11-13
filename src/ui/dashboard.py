@@ -7,7 +7,7 @@ import calendar
 from src.rules_engine import RulesEngine
 from src.metrics import (real_income, real_expenses, avg_monthly, AVG_BASIS_NOTE,
                              comparable_prev_month)
-from src.utils import VIRTUAL_ACCOUNTS, liquid_balance
+from src.utils import VIRTUAL_ACCOUNTS, INVESTMENT_ACCOUNTS, liquid_balance
 from src.ui.wants_envelope import render_wants_envelope
 from src.ui.installments_panel import render_installments_panel
 
@@ -216,7 +216,7 @@ def render_dashboard(data_manager):
             # Conti virtuali (Partner, Prestiti) = crediti/debiti, NON liquidità spendibile
             virtual_bal = all_balances[all_balances['account'].isin(VIRTUAL_ACCOUNTS)]
             archived = set(re.rules.get('archived_accounts') or [])
-            balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS | archived)].reset_index(drop=True)
+            balances = all_balances[~all_balances['account'].isin(VIRTUAL_ACCOUNTS | INVESTMENT_ACCOUNTS | archived)]                 .reset_index(drop=True)
             # Addebiti ricorrenti mensili per conto (es. mutuo su MPS): quanti ne copre il saldo
             rec_month = {}
             try:
@@ -235,6 +235,20 @@ def render_dashboard(data_manager):
                 <h1 style="margin:0; font-size: 2.5rem;">€ {total_liquidity:,.2f}</h1>
             </div>
             """, unsafe_allow_html=True)
+
+            # --- Investimenti: valore attuale vs soldi versati (trasferimenti netti) ---
+            for inv in sorted(INVESTMENT_ACCOUNTS):
+                inv_rows = full_df[full_df['account'] == inv]
+                if inv_rows.empty:
+                    continue
+                value = float(inv_rows['amount'].sum())
+                paid_in = float(inv_rows[inv_rows['type'].isin(['Incoming Transfer', 'Outgoing Transfer'])]['amount'].sum())
+                gain = value - paid_in
+                pct = gain / paid_in * 100 if paid_in else 0.0
+                st.metric(f"📈 {inv}", f"€{value:,.2f}",
+                          delta=f"{gain:+,.2f}€ ({pct:+.1f}%) su €{paid_in:,.0f} investiti",
+                          help="Valore aggiornato a ogni chiusura conti. Nel patrimonio, non nella liquidità "
+                               "disponibile. Se investi altri soldi registra il trasferimento verso questo conto.")
 
             # --- Crediti (prestiti aperti, non spendibili) ---
             # Il saldo del conto 'Partner' NON è mostrato: le compensazioni col

@@ -60,3 +60,19 @@ def test_archived_accounts_hidden_from_selectors(dm):
     dm.rules_engine.rules = {'archived_accounts': ['Vecchio']}
     assert dm.get_unique_accounts(include_archived=False) == [MAIN]
     assert 'Vecchio' in dm.get_unique_accounts()
+
+
+def test_investments_valued_not_untracked_and_card_subtracted():
+    from src.account_closing import group_real
+    neg = {'Carta di credito da addebitare'}
+    real_main = group_real(['Unicredit', 'Carta di credito da addebitare'],
+                           {'Unicredit': 1000.0, 'Carta di credito da addebitare': 68.22}, neg)
+    assert real_main == pytest.approx(931.78)
+    ops = plan_closing({MAIN: 931.78, 'Inv': 240.0}, {MAIN: 931.78, 'Inv': 200.0}, MAIN, investments={'Inv'})
+    assert ops == [{'kind': 'valuation', 'account': 'Inv', 'amount': -40.0}]
+
+
+def test_liquid_balance_excludes_investments():
+    from src.utils import liquid_balance
+    df = pd.DataFrame({'account': ['Conto', 'Investimenti Revolut', 'Partner'], 'amount': [100.0, 200.0, -50.0]})
+    assert liquid_balance(df) == 100.0

@@ -5,12 +5,15 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from src.utils import VIRTUAL_ACCOUNTS
-from src.account_closing import closing_config, plan_closing, apply_closing, UNTRACKED_CATEGORY
+from src.account_closing import closing_config, plan_closing, apply_closing, group_real, UNTRACKED_CATEGORY
 
 
 def _describe(op):
     if op['kind'] == 'transfer':
         return f"🔁 Trasferimento €{op['amount']:,.2f}: {op['from']} → {op['to']} (neutro per le analisi)"
+    if op['kind'] == 'valuation':
+        return (f"📈 Variazione di valore {op['account']} €{op['amount']:+,.2f} "
+                "(andamento di mercato: neutra, non è spesa né entrata)")
     if op['kind'] == 'adjustment':
         return f"⚖️ Aggiustamento neutro €{op['amount']:+,.2f} su {op['account']} (differenza accumulata nel tempo)"
     if op['amount'] < 0:
@@ -22,7 +25,8 @@ def render_account_closing(dm):
     st.header("🧾 Chiusura conti")
     st.caption("Una volta al mese scrivi i saldi reali (dall'app della banca). L'app confronta, ti dice quanto "
                "non hai registrato e si allinea aggiungendo pochi movimenti con la data della chiusura: "
-               "lo storico non viene modificato.")
+               "lo storico non viene modificato. Investimenti: la differenza è l'andamento di mercato "
+               "(se investi altri soldi, registra prima il trasferimento verso il conto investimenti).")
     rules = dm.rules_engine.rules
     cfg = closing_config(rules)
     groups = cfg['groups']
@@ -51,13 +55,15 @@ def render_account_closing(dm):
         with col:
             with st.container(border=True):
                 st.markdown(f"**{acc}**" + (" ⭐" if acc == main else ""))
-                tot = 0.0
                 for sub in subs:
-                    v = st.number_input(sub, value=float(last_details.get(sub, 0.0)), step=10.0,
-                                        format="%.2f", key=f"cl_{acc}_{sub}")
+                    neg = sub in cfg['negative']
+                    v = st.number_input(sub + (" (−)" if neg else ""), value=float(last_details.get(sub, 0.0)),
+                                        step=10.0, format="%.2f", key=f"cl_{acc}_{sub}",
+                                        help=("Spese con carta di credito già registrate nell'app ma non ancora "
+                                              "addebitate sul conto: vengono sottratte." if neg else None))
                     details[sub] = v
-                    tot += v
-                real[acc] = round(tot, 2)
+                tot = group_real(subs, details, cfg['negative'])
+                real[acc] = tot
                 st.caption(f"Reale €{tot:,.2f} · app €{app_bal.get(acc, 0.0):,.2f}")
 
     tbl = pd.DataFrame([{'Conto': a, 'App': app_bal.get(a, 0.0), 'Reale': real[a],
@@ -72,7 +78,7 @@ def render_account_closing(dm):
 
     first_adj = st.checkbox("Prima chiusura: registra la differenza totale come aggiustamento neutro "
                             "(non conta come spesa del mese)", value=first, key='cl_first')
-    ops = plan_closing(app_bal, real, main, first=first_adj)
+    ops = plan_closing(app_bal, real, main, first=first_adj, investments=cfg['investments'])
     if not ops:
         st.success("I saldi coincidono: niente da registrare.")
     else:
