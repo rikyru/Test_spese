@@ -158,3 +158,25 @@ def test_add_purchase_new_and_existing_position(dm):
     assert snap.loc['NVIDIA', 'qty'] == pytest.approx(0.3225) and snap.loc['Liquidità', 'value'] == pytest.approx(0.12)
     with pytest.raises(ValueError):
         add_purchase(dm, acc, 'X', 'X', 100.0, d1, from_account=None, qty=1)
+
+
+def test_month_outlook_counts_commitments_and_expected_salary():
+    from src.insights import month_outlook
+    df = pd.DataFrame({
+        'date': pd.to_datetime(['2026-11-03', '2026-11-05', '2026-11-10', '2026-11-25']),
+        'amount': [-300.0, -100.0, 2300.0, -75.0],
+        'category': ['Spesa', 'Svago', 'Stipendio', 'Fatture'],
+        'type': ['Expense', 'Expense', 'Income', 'Expense'],
+        'description': ['', '', '', 'Bolletta Luce'],
+        'source_file': ['csv', 'csv', 'csv', 'pdf_import'],
+        'account': ['C'] * 4,
+    })
+    commits = pd.DataFrame({'voce': ['Mutuo', 'Bolletta Luce'], 'data': pd.to_datetime(['2026-11-28', '2026-11-25']),
+                            'importo': [390.0, 75.0], 'tipo': ['Ricorrente', 'Già registrata (data futura)']})
+    o = month_outlook(df, commits, typical_variable=1000.0, typical_salary=2300.0, today='2026-11-16')
+    assert o['speso'] == 400.0 and o['entrate'] == 2300.0 and o['stipendio_atteso'] == 0.0
+    assert o['disponibile'] == pytest.approx(2300 - 400 - 465)
+    assert o['risparmio_previsto'] == pytest.approx(o['disponibile'] - 600)   # 1000 tipici − 400 già spesi
+    # stipendio non ancora arrivato: conteggiato come atteso
+    o2 = month_outlook(df[df['category'] != 'Stipendio'], commits, 1000.0, 2300.0, today='2026-11-16')
+    assert o2['stipendio_atteso'] == 2300.0 and o2['disponibile'] == pytest.approx(o['disponibile'])

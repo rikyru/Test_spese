@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import datetime
 import calendar
 from src.rules_engine import RulesEngine
-from src.metrics import real_income, real_expenses, comparable_prev_month
+from src.metrics import real_income, real_expenses, comparable_prev_month, monthly_totals
 from src.ui.wants_envelope import render_wants_envelope
 from src.ui.installments_panel import render_installments_panel
 from src.ui.money_overview import render_money_overview
@@ -95,8 +95,11 @@ def render_dashboard(data_manager):
 
         # --- Riepilogo del periodo (unica riga di KPI; confronto solo in vista Mese) ---
         is_month = filter_mode == "Month" and selected_year and selected_month
-        m_exp_df = real_expenses(filtered_df)
-        m_inc_df = real_income(filtered_df)
+        # Movimenti fino a oggi: quelli con data futura (bollette importate con la
+        # scadenza) non sono ancora usciti e nel mese in corso contano tra gli impegni
+        kpi_df = filtered_df[filtered_df['date'] <= pd.Timestamp(today)]
+        m_exp_df = real_expenses(kpi_df)
+        m_inc_df = real_income(kpi_df)
         m_exp = m_exp_df['amount'].abs().sum()
         m_inc = m_inc_df['amount'].sum()
         m_net = m_inc - m_exp
@@ -124,26 +127,50 @@ def render_dashboard(data_manager):
             period_lbl = "tutto lo storico"
 
         st.subheader(f"Riepilogo {period_lbl}")
+        is_current = is_month and (selected_year, selected_month) == (today.year, today.month)
         r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Speso", f"€{m_exp:,.0f}", delta=d_exp, delta_color="inverse")
-        r2.metric("Entrate", f"€{m_inc:,.0f}", delta=d_inc)
-        r3.metric("Risparmio", f"€{m_net:,.0f}", delta=d_net)
-        r4.metric("Tasso di risparmio", f"{m_rate:.0f}%")
+        if is_current:
+            # Mese in corso: il risparmio "a oggi" illude (mutuo, bollette, rate devono ancora
+            # uscire). Si mostra cosa resta davvero dopo gli impegni noti.
+            from src.insights import month_commitments, month_outlook
+            commits = month_commitments(data_manager, df[df['account'].isin(account_filter)] if account_filter else df)
+            hist = df[df['date'] <= pd.Timestamp(today)]
+            all_exp = real_expenses(hist)
+            var_exp = all_exp[all_exp['source_file'] != 'Recurring'] if 'source_file' in all_exp else all_exp
+            sal = real_income(hist)
+            sal = sal[sal['category'] == 'Stipendio']
+            typ_salary = float(sal.groupby(sal['date'].dt.to_period('M'))['amount'].sum().tail(6).median()) \
+                if not sal.empty else 0.0
+            # Variabile di un mese "normale": mediana degli ultimi 12 mesi (la media è gonfiata
+            # dai mesi con viaggi/regali grossi)
+            var_m = monthly_totals(var_exp, 'expense', ref_df=hist).tail(12)
+            typ_var = float(var_m.median()) if len(var_m) else 0.0
+            o = month_outlook(filtered_df, commits, typ_var, typ_salary)
+            r1.metric("Speso finora", f"€{o['speso']:,.0f}", delta=d_exp, delta_color="inverse")
+            r2.metric("Entrate", f"€{o['entrate']:,.0f}", delta=d_inc,
+                      help=(f"Stipendio non ancora arrivato: conto €{o['stipendio_atteso']:,.0f} attesi."
+                            if o['stipendio_atteso'] else None))
+            r3.metric("Disponibile fino a fine mese", f"€{o['disponibile']:,.0f}",
+                      help="Entrate (+ stipendio atteso) − speso finora − spese fisse ancora da pagare entro fine "
+                           "mese (mutuo, ricorrenti, rate, bollette già registrate, spese in programma). "
+                           "È quanto puoi spendere senza intaccare i risparmi.")
+            r4.metric("Risparmio previsto a fine mese", f"€{o['risparmio_previsto']:,.0f}",
+                      help=f"Disponibile − spesa variabile che manca per arrivare a un mese normale "
+                           f"(€{o['variabile_restante']:,.0f}: mediana degli ultimi 12 mesi di €{typ_var:,.0f} "
+                           f"meno quanto già speso). Viaggi o regali grossi in arrivo vanno in più.")
+            if not commits.empty:
+                st.caption(f"Ancora da pagare entro fine mese: **€{o['impegni']:,.0f}** — " + ", ".join(
+                    f"{r['voce']} €{r['importo']:,.0f} ({r['data'].strftime('%d/%m')})" for _, r in commits.iterrows()))
+            if o['stipendio_atteso']:
+                st.caption(f"Stipendio di questo mese non ancora registrato: conteggiati €{o['stipendio_atteso']:,.0f} attesi.")
+        else:
+            r1.metric("Speso", f"€{m_exp:,.0f}", delta=d_exp, delta_color="inverse")
+            r2.metric("Entrate", f"€{m_inc:,.0f}", delta=d_inc)
+            r3.metric("Risparmio", f"€{m_net:,.0f}", delta=d_net)
+            r4.metric("Tasso di risparmio", f"{m_rate:.0f}%")
         st.caption("Entrate e spese reali: trasferimenti tra conti, saldo iniziale e aggiustamenti esclusi.")
 
         if is_month:
-            # Impegni fissi ancora da pagare entro fine mese (ricorrenti/rate)
-            last_d = calendar.monthrange(selected_year, selected_month)[1]
-            try:
-                pend = data_manager.get_projected_recurring(datetime.date(selected_year, selected_month, last_d))
-                pend = pend[(pd.to_datetime(pend['date']).dt.date > today) & (pend['amount'] < 0)] \
-                    if not pend.empty else pend
-                if not pend.empty:
-                    st.caption(f"Ancora da pagare entro fine mese (ricorrenti/rate): "
-                               f"**€{pend['amount'].abs().sum():,.0f}** — "
-                               + ", ".join(f"{r['name']} €{abs(r['amount']):,.0f}" for _, r in pend.head(6).iterrows()))
-            except Exception:
-                pass
 
             # Riga narrativa: categoria top, spesa più grande, stato budget
             bits = []

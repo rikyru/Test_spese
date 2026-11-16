@@ -62,13 +62,21 @@ def render_money_overview(df, data_manager, rules_engine):
     inv = _investment_values(data_manager, now_df)
     invested = sum(v for v, _, _ in inv.values())
     total = liquid + invested
+    try:
+        from src.insights import month_commitments
+        committed = float(month_commitments(data_manager, df)['importo'].sum())
+    except Exception:
+        committed = 0.0
 
     st.markdown(
         f"<div style='padding:16px 20px;border-radius:10px;background:#1B5E20;color:white;margin-bottom:12px;'>"
         f"<div style='font-size:1rem;opacity:.85'>I tuoi soldi oggi</div>"
         f"<div style='font-size:2.3rem;font-weight:700;line-height:1.2'>€ {total:,.2f}</div>"
         f"<div style='font-size:.95rem;opacity:.85'>disponibili € {liquid:,.2f}"
-        + (f" · investiti € {invested:,.2f}" if inv else "") + "</div></div>",
+        + (f" · investiti € {invested:,.2f}" if inv else "") + "</div>"
+        + (f"<div style='font-size:.95rem;opacity:.85'>già impegnati entro fine mese € {committed:,.2f} "
+           f"(mutuo, bollette, rate…) → liberi € {liquid - committed:,.2f}</div>" if committed else "")
+        + "</div>",
         unsafe_allow_html=True)
 
     # Addebiti ricorrenti mensili per conto (es. mutuo su MPS)

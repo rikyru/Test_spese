@@ -155,3 +155,67 @@ def untagged_or_unclassified(df):
     no_tags = e[e['tags'].apply(_no_tags)]
     no_nec = e[~e['necessity'].isin(['Need', 'Want'])] if 'necessity' in e else e.iloc[0:0]
     return no_tags, no_nec
+
+
+# --------------------------------------------------------------------------
+# IMPEGNI DEL MESE ("safe to spend")
+# --------------------------------------------------------------------------
+def month_commitments(dm, df, today=None):
+    """Spese già note che devono ancora uscire entro fine mese: ricorrenti e rate
+    non ancora addebitate, movimenti registrati con data futura (es. bollette
+    importate con la scadenza) e spese in programma. Ritorna DataFrame
+    voce, data, importo (positivo), tipo."""
+    import calendar
+    import datetime
+    today = pd.Timestamp(today or datetime.date.today()).normalize()
+    end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+    rows = []
+    try:
+        pr = dm.get_projected_recurring(end.date())
+        for _, r in pr.iterrows():
+            if r['amount'] < 0:
+                rows.append({'voce': r['name'], 'data': pd.to_datetime(r['date']), 'importo': abs(r['amount']),
+                             'tipo': 'Ricorrente'})
+    except Exception:
+        pass
+    d = pd.to_datetime(df['date'])
+    fut = df[(d > today) & (d <= end) & (df['type'] == 'Expense')]
+    for _, r in fut.iterrows():
+        rows.append({'voce': r['description'] or r['category'], 'data': pd.to_datetime(r['date']),
+                     'importo': abs(r['amount']), 'tipo': 'Già registrata (data futura)'})
+    try:
+        pl = dm.get_planned()
+        pl = pl[(pd.to_datetime(pl['due_date']) > today) & (pd.to_datetime(pl['due_date']) <= end)]
+        for _, r in pl.iterrows():
+            rows.append({'voce': r['name'], 'data': pd.to_datetime(r['due_date']), 'importo': abs(r['amount']),
+                         'tipo': 'In programma'})
+    except Exception:
+        pass
+    out = pd.DataFrame(rows, columns=['voce', 'data', 'importo', 'tipo'])
+    return out.sort_values('data').reset_index(drop=True)
+
+
+def month_outlook(df, commitments, typical_variable, typical_salary, today=None, salary_category='Stipendio'):
+    """Il mese in corso con gli impegni noti. Ritorna dict con:
+    entrate, speso, impegni, stipendio_atteso (se lo stipendio non è ancora arrivato),
+    disponibile (= entrate + stipendio atteso − speso − impegni),
+    variabile_restante (spesa variabile tipica che manca a fine mese) e
+    risparmio_previsto (= disponibile − variabile_restante)."""
+    import datetime
+    from src.metrics import real_income, real_expenses
+    today = pd.Timestamp(today or datetime.date.today()).normalize()
+    d = pd.to_datetime(df['date'])
+    month = df[(d.dt.to_period('M') == today.to_period('M')) & (d <= today)]
+    inc = real_income(month)
+    exp = real_expenses(month)
+    entrate = float(inc['amount'].sum())
+    speso = float(exp['amount'].abs().sum())
+    stip_atteso = 0.0 if (inc['category'] == salary_category).any() else float(typical_salary or 0.0)
+    impegni = float(commitments['importo'].sum()) if not commitments.empty else 0.0
+    var_spent = float(exp[exp.get('source_file', pd.Series(index=exp.index, dtype=object)) != 'Recurring']['amount']
+                      .abs().sum()) if not exp.empty else 0.0
+    var_rest = max(float(typical_variable or 0.0) - var_spent, 0.0)
+    disponibile = entrate + stip_atteso - speso - impegni
+    return {'entrate': entrate, 'speso': speso, 'impegni': impegni, 'stipendio_atteso': stip_atteso,
+            'disponibile': disponibile, 'variabile_restante': var_rest,
+            'risparmio_previsto': disponibile - var_rest}
