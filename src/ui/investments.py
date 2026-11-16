@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from src.utils import INVESTMENT_ACCOUNTS, INVESTMENT_CATEGORY, VIRTUAL_ACCOUNTS
 from src.metrics import avg_monthly
 from src.investments import (parse_revolut_screenshot, reconcile_with_total, guess_yahoo, implied_cost,
-                             live_portfolio, pac_projection)
+                             live_portfolio, pac_projection, search_ticker, price_in_eur, add_purchase)
 
 ACCOUNT = sorted(INVESTMENT_ACCOUNTS)[0]
 SINGLE_STOCK_LIMIT = 30   # % del portafoglio oltre cui un singolo titolo è "concentrazione"
@@ -32,6 +32,7 @@ def render_investments(dm):
         st.info("Nessun portafoglio ancora: carica lo screenshot del conto di intermediazione Revolut qui sotto.")
     else:
         _portfolio(pf, snap_date)
+    _purchase_form(dm, pf)
     _update_from_screenshot(dm)
     if not pf.empty:
         _history(dm, pf)
@@ -82,6 +83,49 @@ def _portfolio(pf, snap_date):
     fig = px.pie(pos, values='value_now', names='name', hole=0.45)
     fig.update_layout(height=300, margin=dict(t=10, b=10), showlegend=True)
     st.plotly_chart(fig, use_container_width=True)
+
+
+# --------------------------------------------------------------------------
+def _purchase_form(dm, pf):
+    with st.expander("Registra un acquisto", expanded=False):
+        st.caption("Cerca il titolo, scrivi quanto hai speso e da dove sono usciti i soldi: l'app calcola la "
+                   "quantità dal prezzo di oggi (o scrivila tu se la conosci), aggiunge la posizione al "
+                   "portafoglio e registra il trasferimento verso il conto investimenti.")
+        q = st.text_input("Cerca titolo (nome o ticker)", key='buy_q', placeholder="es. nvidia")
+        results = search_ticker(q) if q and len(q) >= 2 else []
+        if q and not results:
+            st.caption("Nessun risultato: prova con il ticker (es. NVDA).")
+        if not results:
+            return
+        labels = [f"{t} — {n} ({x})" for t, n, x in results]
+        idx = st.selectbox("Titolo", range(len(labels)), format_func=lambda i: labels[i], key='buy_sel')
+        yahoo, name, _ = results[idx]
+        p_eur, p, cur = price_in_eur(yahoo)
+        if p_eur:
+            st.caption(f"Prezzo attuale: {p:,.2f} {cur}" + (f" ≈ €{p_eur:,.2f}" if cur != 'EUR' else ""))
+        c1, c2, c3 = st.columns(3)
+        amount = c1.number_input("Importo speso €", 0.0, 1_000_000.0, 50.0, step=10.0, key='buy_amt')
+        qty = c2.number_input("Quantità (0 = calcola dal prezzo)", 0.0, 1_000_000.0, 0.0, step=0.01,
+                              format="%.4f", key='buy_qty')
+        d = c3.date_input("Data", datetime.date.today(), key='buy_date')
+        cash = float(pf[pf['is_cash']]['value_now'].sum()) if not pf.empty else 0.0
+        sources = [a for a in dm.get_unique_accounts(include_archived=False)
+                   if a not in INVESTMENT_ACCOUNTS and a not in VIRTUAL_ACCOUNTS]
+        main = dm.get_main_wallet()
+        opts = sources + ([f"Liquidità del conto investimenti (€{cash:,.2f})"] if cash > 0 else [])
+        src = st.selectbox("Pagato da", opts, index=opts.index(main) if main in opts else 0, key='buy_src')
+        q_eff = qty or ((amount / p_eur) if p_eur else None)
+        if q_eff:
+            st.caption(f"Verranno registrate {q_eff:.4f} quote di {name} per €{amount:,.2f}.")
+        if st.button("Registra acquisto", type="primary", key='buy_go', disabled=not (amount > 0 and q_eff)):
+            try:
+                add_purchase(dm, ACCOUNT, name, yahoo, amount, d,
+                             from_account=None if src.startswith("Liquidità del conto") else src,
+                             qty=q_eff, currency=cur or 'EUR')
+                st.success(f"Acquisto registrato: {q_eff:.4f} {yahoo} per €{amount:,.2f}.")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
 
 
 # --------------------------------------------------------------------------

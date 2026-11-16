@@ -2,6 +2,7 @@
 import datetime
 import pandas as pd
 import pytest
+from tests.test_data_manager import dm  # noqa: F401
 from src.insights import (installments_overview, seasonal_index, unmatched_transfers,
                           negative_accounts, stale_accounts, possible_duplicates)
 
@@ -134,3 +135,26 @@ def test_portfolio_value_and_pac():
     s = pac_projection(100, 2, 0.0)
     assert list(s) == [1200.0, 2400.0]
     assert pac_projection(100, 1, 0.05).iloc[-1] > 1200
+
+
+def test_add_purchase_new_and_existing_position(dm):
+    import datetime
+    from src.investments import add_purchase, latest_snapshot
+    acc = 'Investimenti Revolut'
+    d0 = datetime.date(2026, 11, 13)
+    dm.save_investment_snapshot(d0, acc, [
+        {'name': 'STM', 'yahoo': 'SGM.DE', 'qty': 1.62, 'value': 67.87, 'cost': 75.0, 'currency': 'EUR'},
+        {'name': 'Liquidità', 'value': 1.12, 'cost': 1.12, 'is_cash': True, 'currency': 'EUR'}])
+    d1 = datetime.date(2026, 11, 16)
+    q = add_purchase(dm, acc, 'NVIDIA', 'NVDA', 50.0, d1, from_account='Portafoglio', price_eur=160.0, currency='USD')
+    assert q == pytest.approx(0.3125)
+    snap = latest_snapshot(dm, acc).set_index('name')
+    assert snap.loc['NVIDIA', 'cost'] == 50.0 and snap.loc['STM', 'qty'] == 1.62
+    bal = dm.get_account_balances()
+    assert bal['Portafoglio'] == -50.0 and bal[acc] == 50.0
+    # secondo acquisto stesso titolo, pagato con la liquidità del conto
+    add_purchase(dm, acc, 'NVIDIA', 'NVDA', 1.0, d1, from_account=None, qty=0.01)
+    snap = latest_snapshot(dm, acc).set_index('name')
+    assert snap.loc['NVIDIA', 'qty'] == pytest.approx(0.3225) and snap.loc['Liquidità', 'value'] == pytest.approx(0.12)
+    with pytest.raises(ValueError):
+        add_purchase(dm, acc, 'X', 'X', 100.0, d1, from_account=None, qty=1)

@@ -208,3 +208,66 @@ def live_portfolio(dm, account, max_age_hours=6, fetch=True):
                 quotes[y] = (p, c)
     fx = {c: quotes[f"EUR{c}=X"][0] for c in currencies if f"EUR{c}=X" in quotes}
     return portfolio_value(snap, quotes, fx), pd.to_datetime(snap['snapshot_date'].iloc[0])
+
+
+def search_ticker(query, timeout=8):
+    """Cerca un titolo per nome su Yahoo: lista di (ticker, nome, borsa), solo azioni/ETF."""
+    import urllib.parse
+    try:
+        req = urllib.request.Request(
+            "https://query1.finance.yahoo.com/v1/finance/search?q="
+            f"{urllib.parse.quote(query)}&quotesCount=8&newsCount=0", headers={'User-Agent': 'Mozilla/5.0'})
+        quotes = json.load(urllib.request.urlopen(req, timeout=timeout)).get('quotes', [])
+    except Exception:
+        return []
+    return [(q['symbol'], q.get('shortname') or q.get('longname') or q['symbol'], q.get('exchange', ''))
+            for q in quotes if q.get('quoteType') in ('EQUITY', 'ETF')]
+
+
+def price_in_eur(yahoo, quotes_fn=fetch_quote):
+    """Prezzo attuale in euro di un ticker: (prezzo_eur, prezzo, valuta) o (None, None, None)."""
+    p, cur = quotes_fn(yahoo)
+    if p is None:
+        return None, None, None
+    if cur in (None, 'EUR'):
+        return p, p, cur or 'EUR'
+    fx, _ = quotes_fn(f"EUR{cur}=X")
+    return (p / fx if fx else None), p, cur
+
+
+def add_purchase(dm, account, name, yahoo, amount, date, from_account=None, qty=None, price_eur=None,
+                 currency='EUR'):
+    """Registra un acquisto: aggiunge (o incrementa) la posizione nell'ultima fotografia
+    del portafoglio — nuova fotografia datata `date` — e, se `from_account`, il
+    trasferimento dei soldi verso il conto investimenti. Se il pagamento arriva dalla
+    liquidità del conto di intermediazione (from_account=None) la scala da lì.
+    Ritorna la quantità registrata."""
+    if qty is None:
+        if not price_eur:
+            raise ValueError("Serve la quantità o il prezzo in euro")
+        qty = amount / price_eur
+    snap = latest_snapshot(dm, account)
+    snap = snap.drop(columns=[c for c in ('snapshot_date', 'account', 'created_at') if c in snap.columns])
+    positions = snap.astype(object).where(snap.notna(), None).to_dict('records') if not snap.empty else []
+    for p in positions:
+        p['is_cash'] = bool(p.get('is_cash'))
+    existing = next((p for p in positions if not p['is_cash'] and p.get('yahoo') == yahoo), None)
+    if existing:
+        existing['qty'] = (existing.get('qty') or 0) + qty
+        existing['cost'] = (existing.get('cost') or 0) + amount
+        existing['value'] = (existing.get('value') or 0) + amount
+    else:
+        positions.append({'name': name, 'symbol': yahoo.split('.')[0], 'yahoo': yahoo, 'qty': qty,
+                          'price': amount / qty if qty else None, 'currency': currency,
+                          'value': amount, 'pct': 0.0, 'cost': amount, 'is_cash': False})
+    if from_account is None:
+        cash = next((p for p in positions if p['is_cash']), None)
+        if cash is None or (cash.get('value') or 0) < amount - 0.01:
+            raise ValueError("Liquidità del conto investimenti insufficiente")
+        cash['value'] -= amount
+        cash['cost'] = cash['value']
+    dm.save_investment_snapshot(date, account, positions)
+    if from_account:
+        dm.add_transfer(from_account, account, amount, date, description=f"Acquisto {name}",
+                        tag='investimento', source='investment_buy')
+    return qty
