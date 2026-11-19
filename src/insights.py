@@ -199,7 +199,8 @@ def month_outlook(df, commitments, typical_variable, typical_salary, today=None,
     """Il mese in corso con gli impegni noti. Ritorna dict con:
     entrate, speso, impegni, stipendio_atteso (se lo stipendio non è ancora arrivato),
     disponibile (= entrate + stipendio atteso − speso − impegni),
-    variabile_restante (spesa variabile tipica che manca a fine mese) e
+    variabile_restante (spesa variabile tipica dei giorni che mancano a fine mese),
+    variabile_speso (spesa non ricorrente già fatta nel mese) e
     risparmio_previsto (= disponibile − variabile_restante)."""
     import datetime
     from src.metrics import real_income, real_expenses
@@ -214,8 +215,13 @@ def month_outlook(df, commitments, typical_variable, typical_salary, today=None,
     impegni = float(commitments['importo'].sum()) if not commitments.empty else 0.0
     var_spent = float(exp[exp.get('source_file', pd.Series(index=exp.index, dtype=object)) != 'Recurring']['amount']
                       .abs().sum()) if not exp.empty else 0.0
-    var_rest = max(float(typical_variable or 0.0) - var_spent, 0.0)
+    # Variabile ancora da spendere: ritmo giornaliero tipico × giorni che mancano
+    # (scende ogni giorno che passa, a fine mese è zero → risparmio previsto = reale)
+    days_in_month = today.days_in_month
+    days_left = days_in_month - today.day
+    var_rest = float(typical_variable or 0.0) * days_left / days_in_month
     disponibile = entrate + stip_atteso - speso - impegni
     return {'entrate': entrate, 'speso': speso, 'impegni': impegni, 'stipendio_atteso': stip_atteso,
-            'disponibile': disponibile, 'variabile_restante': var_rest,
+            'disponibile': disponibile, 'variabile_restante': var_rest, 'variabile_speso': var_spent,
+            'giorni_rimasti': days_left,
             'risparmio_previsto': disponibile - var_rest}

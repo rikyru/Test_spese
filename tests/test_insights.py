@@ -176,7 +176,12 @@ def test_month_outlook_counts_commitments_and_expected_salary():
     o = month_outlook(df, commits, typical_variable=1000.0, typical_salary=2300.0, today='2026-11-16')
     assert o['speso'] == 400.0 and o['entrate'] == 2300.0 and o['stipendio_atteso'] == 0.0
     assert o['disponibile'] == pytest.approx(2300 - 400 - 465)
-    assert o['risparmio_previsto'] == pytest.approx(o['disponibile'] - 600)   # 1000 tipici − 400 già spesi
+    # 14 giorni rimasti su 30 → 1000 × 14/30 ancora da spendere
+    assert o['variabile_restante'] == pytest.approx(1000 * 14 / 30)
+    assert o['risparmio_previsto'] == pytest.approx(o['disponibile'] - 1000 * 14 / 30)
+    # più passano i giorni, meno variabile manca; l'ultimo giorno è zero
+    o_end = month_outlook(df, commits, 1000.0, 2300.0, today='2026-11-30')
+    assert o_end['variabile_restante'] == 0.0
     # stipendio non ancora arrivato: conteggiato come atteso
     o2 = month_outlook(df[df['category'] != 'Stipendio'], commits, 1000.0, 2300.0, today='2026-11-16')
     assert o2['stipendio_atteso'] == 2300.0 and o2['disponibile'] == pytest.approx(o['disponibile'])

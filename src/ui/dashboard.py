@@ -155,9 +155,10 @@ def render_dashboard(data_manager):
                            "mese (mutuo, ricorrenti, rate, bollette già registrate, spese in programma). "
                            "È quanto puoi spendere senza intaccare i risparmi.")
             r4.metric("Risparmio previsto a fine mese", f"€{o['risparmio_previsto']:,.0f}",
-                      help=f"Disponibile − spesa variabile che manca per arrivare a un mese normale "
-                           f"(€{o['variabile_restante']:,.0f}: mediana degli ultimi 12 mesi di €{typ_var:,.0f} "
-                           f"meno quanto già speso). Viaggi o regali grossi in arrivo vanno in più.")
+                      help=f"Disponibile − spesa variabile tipica dei {o['giorni_rimasti']} giorni che mancano "
+                           f"(€{o['variabile_restante']:,.0f} = €{typ_var:,.0f}/mese, mediana degli ultimi 12 mesi, "
+                           f"in proporzione ai giorni). Finora di variabile hai speso €{o['variabile_speso']:,.0f}. "
+                           f"Ogni giorno senza spese la stima migliora; viaggi o regali grossi in arrivo vanno in più.")
             if not commits.empty:
                 st.caption(f"Ancora da pagare entro fine mese: **€{o['impegni']:,.0f}** — " + ", ".join(
                     f"{r['voce']} €{r['importo']:,.0f} ({r['data'].strftime('%d/%m')})" for _, r in commits.iterrows()))
