@@ -114,7 +114,13 @@ def _purchase_form(dm, pf):
                    if a not in INVESTMENT_ACCOUNTS and a not in VIRTUAL_ACCOUNTS]
         main = dm.get_main_wallet()
         opts = sources + ([f"Liquidità del conto investimenti (€{cash:,.2f})"] if cash > 0 else [])
-        src = st.selectbox("Pagato da", opts, index=opts.index(main) if main in opts else 0, key='buy_src')
+        # Se nel conto investimenti c'è liquidità sufficiente (es. dopo una vendita) di solito
+        # l'acquisto si paga con quella: proposta di default, così non si conta un bonifico che non c'è
+        default = (len(opts) - 1 if cash >= amount - 0.01 and cash > 0
+                   else opts.index(main) if main in opts else 0)
+        src = st.selectbox("Pagato da", opts, index=default, key=f"buy_src_{default}")
+        if not src.startswith("Liquidità del conto"):
+            st.caption(f"Verrà registrato un bonifico da {src} al conto investimenti per €{amount:,.2f}.")
         q_eff = qty or ((amount / p_eur) if p_eur else None)
         if q_eff:
             st.caption(f"Verranno registrate {q_eff:.4f} quote di {name} per €{amount:,.2f}.")
