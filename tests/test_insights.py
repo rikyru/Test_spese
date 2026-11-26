@@ -185,3 +185,36 @@ def test_month_outlook_counts_commitments_and_expected_salary():
     # stipendio non ancora arrivato: conteggiato come atteso
     o2 = month_outlook(df[df['category'] != 'Stipendio'], commits, 1000.0, 2300.0, today='2026-11-16')
     assert o2['stipendio_atteso'] == 2300.0 and o2['disponibile'] == pytest.approx(o['disponibile'])
+
+
+def test_add_sale_then_buy_with_cash(dm):
+    import datetime
+    from src.investments import add_purchase, add_sale, latest_snapshot
+    acc = 'Investimenti Revolut'
+    d0 = datetime.date(2026, 11, 13)
+    dm.save_investment_snapshot(d0, acc, [
+        {'name': 'NVIDIA', 'yahoo': 'NVDA', 'qty': 0.3, 'value': 50.0, 'cost': 50.0, 'currency': 'USD'},
+        {'name': 'STM', 'yahoo': 'SGM.DE', 'qty': 1.0, 'value': 40.0, 'cost': 45.0, 'currency': 'EUR'}])
+    dm.add_transfer('Portafoglio', acc, 95.0, d0)
+    d1 = datetime.date(2026, 11, 20)
+    out = add_sale(dm, acc, 'NVDA', 0.3, 47.5, d1)
+    assert out['gain'] == pytest.approx(-2.5)
+    snap = latest_snapshot(dm, acc).set_index('name')
+    assert 'NVIDIA' not in snap.index and snap.loc['Liquidità', 'value'] == pytest.approx(47.5)
+    # il saldo del conto investimenti segue il portafoglio: 40 STM + 47.5 liquidità
+    assert dm.get_account_balances()[acc] == pytest.approx(87.5)
+    # compro Novo con la liquidità
+    add_purchase(dm, acc, 'Novo Nordisk', 'NOVC.DE', 47.5, d1, from_account=None, price_eur=50.0)
+    snap = latest_snapshot(dm, acc).set_index('name')
+    assert snap.loc['Novo Nordisk', 'qty'] == pytest.approx(0.95) and snap.loc['Liquidità', 'value'] == pytest.approx(0)
+    # vendita parziale con incasso su un altro conto
+    out = add_sale(dm, acc, 'SGM.DE', 0.5, 25.0, d1, to_account='Portafoglio')
+    assert out['cost_sold'] == pytest.approx(22.5) and out['gain'] == pytest.approx(2.5)
+    snap = latest_snapshot(dm, acc).set_index('name')
+    assert snap.loc['STM', 'qty'] == pytest.approx(0.5) and snap.loc['STM', 'cost'] == pytest.approx(22.5)
+    bal = dm.get_account_balances()
+    assert bal['Portafoglio'] == pytest.approx(-95 + 25) and bal[acc] == pytest.approx(20 + 47.5)
+    with pytest.raises(ValueError):
+        add_sale(dm, acc, 'SGM.DE', 5, 10.0, d1)
+    with pytest.raises(ValueError):
+        add_sale(dm, acc, 'SGM.DE', 0.1, 5.0, d0)

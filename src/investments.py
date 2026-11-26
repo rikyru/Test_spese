@@ -271,3 +271,72 @@ def add_purchase(dm, account, name, yahoo, amount, date, from_account=None, qty=
         dm.add_transfer(from_account, account, amount, date, description=f"Acquisto {name}",
                         tag='investimento', source='investment_buy')
     return qty
+
+
+def _positions(snap):
+    snap = snap.drop(columns=[c for c in ('snapshot_date', 'account', 'created_at') if c in snap.columns])
+    positions = snap.astype(object).where(snap.notna(), None).to_dict('records') if not snap.empty else []
+    for p in positions:
+        p['is_cash'] = bool(p.get('is_cash'))
+    return positions
+
+
+def align_ledger(dm, account, date, total, description):
+    """Porta il saldo del conto investimenti nell'app al valore `total` alla data,
+    con una variazione di valore (neutra per le analisi). Ritorna la variazione."""
+    from src.utils import INVESTMENT_CATEGORY
+    bal = float(dm.con.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account = ? "
+                               "AND date <= ?", [account, date]).fetchone()[0])
+    diff = round(total - bal, 2)
+    if abs(diff) >= 0.01:
+        dm.con.execute("""
+            INSERT INTO transactions (id, date, amount, currency, account, category, tags, description,
+                                      type, source_file, original_description)
+            VALUES (uuid(), ?, ?, 'EUR', ?, ?, ['investimenti'], ?, 'Adjustment', 'investments', ?)
+        """, [date, diff, account, INVESTMENT_CATEGORY, description, description])
+    return diff
+
+
+def add_sale(dm, account, yahoo, qty, proceeds, date, to_account=None):
+    """Registra una vendita: toglie `qty` quote del titolo dall'ultima fotografia
+    (costo ridotto in proporzione, a costo medio) e mette l'incasso nella liquidità
+    del conto di intermediazione oppure, se `to_account`, lo trasferisce lì.
+    Il saldo del conto investimenti nell'app si allinea al nuovo valore del
+    portafoglio (variazione neutra). Ritorna dict qty, costo venduto, plusvalenza."""
+    snap = latest_snapshot(dm, account)
+    if snap.empty:
+        raise ValueError("Nessuna posizione registrata nel portafoglio")
+    last = pd.to_datetime(snap['snapshot_date'].iloc[0]).date()
+    date = pd.to_datetime(date).date()
+    if date < last:
+        raise ValueError(f"La data è precedente all'ultima fotografia del portafoglio ({last:%d/%m/%Y})")
+    positions = _positions(snap)
+    pos = next((p for p in positions if not p['is_cash'] and p.get('yahoo') == yahoo), None)
+    if pos is None:
+        raise ValueError(f"{yahoo} non è nel portafoglio")
+    held = float(pos.get('qty') or 0)
+    if qty > held + 1e-6:
+        raise ValueError(f"Hai solo {held:.4f} quote di {pos['name']}")
+    share = min(qty / held, 1.0) if held else 1.0
+    cost_sold = float(pos.get('cost') or 0) * share
+    if share >= 1.0 - 1e-6:
+        positions.remove(pos)
+    else:
+        pos['qty'] = held - qty
+        pos['cost'] = float(pos.get('cost') or 0) - cost_sold
+        pos['value'] = float(pos.get('value') or 0) * (1 - share)
+    if to_account is None:
+        cash = next((p for p in positions if p['is_cash']), None)
+        if cash is None:
+            cash = {'name': 'Liquidità', 'value': 0.0, 'cost': 0.0, 'is_cash': True, 'currency': 'EUR'}
+            positions.append(cash)
+        cash['value'] = float(cash.get('value') or 0) + proceeds
+        cash['cost'] = cash['value']
+    dm.save_investment_snapshot(date, account, positions)
+    gain = proceeds - cost_sold
+    total = sum(float(p.get('value') or 0) for p in positions)
+    if to_account:
+        dm.add_transfer(account, to_account, proceeds, date, description=f"Vendita {pos['name']}",
+                        tag='investimento', source='investment_sell')
+    align_ledger(dm, account, date, total, f"Vendita {pos['name']} ({gain:+.2f}€ realizzati)")
+    return {'qty': qty, 'cost_sold': cost_sold, 'gain': gain, 'name': pos['name']}

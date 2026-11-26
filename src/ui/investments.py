@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from src.utils import INVESTMENT_ACCOUNTS, INVESTMENT_CATEGORY, VIRTUAL_ACCOUNTS
 from src.metrics import avg_monthly
 from src.investments import (parse_revolut_screenshot, reconcile_with_total, guess_yahoo, implied_cost,
-                             live_portfolio, pac_projection, search_ticker, price_in_eur, add_purchase)
+                             live_portfolio, pac_projection, search_ticker, price_in_eur, add_purchase, add_sale)
 
 ACCOUNT = sorted(INVESTMENT_ACCOUNTS)[0]
 SINGLE_STOCK_LIMIT = 30   # % del portafoglio oltre cui un singolo titolo è "concentrazione"
@@ -33,6 +33,7 @@ def render_investments(dm):
     else:
         _portfolio(pf, snap_date)
     _purchase_form(dm, pf)
+    _sale_form(dm, pf)
     _update_from_screenshot(dm)
     if not pf.empty:
         _history(dm, pf)
@@ -123,6 +124,47 @@ def _purchase_form(dm, pf):
                              from_account=None if src.startswith("Liquidità del conto") else src,
                              qty=q_eff, currency=cur or 'EUR')
                 st.success(f"Acquisto registrato: {q_eff:.4f} {yahoo} per €{amount:,.2f}.")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+
+# --------------------------------------------------------------------------
+def _sale_form(dm, pf):
+    held = pf[~pf['is_cash'] & (pf['qty'].fillna(0) > 0)] if not pf.empty else pf
+    if held.empty:
+        return
+    with st.expander("Registra una vendita", expanded=False):
+        st.caption("Scegli il titolo, quante quote hai venduto e quanto hai incassato (lo vedi nel dettaglio "
+                   "dell'ordine su Revolut). L'incasso resta nella liquidità del conto investimenti, pronto per "
+                   "un nuovo acquisto (in 'Registra un acquisto' scegli 'Pagato da: Liquidità del conto'), "
+                   "oppure lo sposti su un altro conto.")
+        labels = [f"{r['name']} — {r['qty']:.4f} quote, ~€{r['value_now']:,.2f} oggi" for _, r in held.iterrows()]
+        i = st.selectbox("Titolo venduto", range(len(labels)), format_func=lambda k: labels[k], key='sell_sel')
+        r = held.iloc[i]
+        c1, c2, c3 = st.columns(3)
+        qty = c1.number_input("Quote vendute", 0.0, float(r['qty']), float(r['qty']), step=0.01,
+                              format="%.4f", key=f"sell_qty_{r['yahoo']}")
+        est = float(r['value_now']) * (qty / float(r['qty'])) if r['qty'] else 0.0
+        proceeds = c2.number_input("Incassato €", 0.0, 1_000_000.0, round(est, 2), step=1.0,
+                                   key=f"sell_amt_{r['yahoo']}")
+        d = c3.date_input("Data", datetime.date.today(), key='sell_date')
+        dests = [a for a in dm.get_unique_accounts(include_archived=False)
+                 if a not in INVESTMENT_ACCOUNTS and a not in VIRTUAL_ACCOUNTS]
+        opts = ["Resta nella liquidità del conto investimenti"] + dests
+        dest = st.selectbox("L'incasso va su", opts, key='sell_dest')
+        cost_sold = float(r['cost'] or 0) * (qty / float(r['qty'])) if r['qty'] else 0.0
+        gain = proceeds - cost_sold
+        st.caption(f"Costo delle quote vendute €{cost_sold:,.2f} → risultato {gain:+,.2f}€"
+                   + (f" (tasse 26% ≈ €{gain * 0.26:,.2f}, da dichiarare: Revolut non fa da sostituto d'imposta)"
+                      if gain > 0 else " (la minusvalenza si può compensare con plusvalenze future, entro 4 anni)"
+                      if gain < 0 else ""))
+        if st.button("Registra vendita", type="primary", key='sell_go', disabled=not (qty > 0 and proceeds >= 0)):
+            try:
+                out = add_sale(dm, ACCOUNT, r['yahoo'], qty, proceeds, d,
+                               to_account=None if dest.startswith("Resta") else dest)
+                st.success(f"Vendita registrata: {out['qty']:.4f} {out['name']} per €{proceeds:,.2f} "
+                           f"({out['gain']:+,.2f}€).")
                 st.rerun()
             except ValueError as e:
                 st.error(str(e))
